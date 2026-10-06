@@ -701,7 +701,7 @@ function showPlayer(title: string): void {
   host.id = P;
   host.style.position = 'fixed';
   host.style.zIndex = '2147483647';
-  host.style.pointerEvents = 'none';
+  host.style.pointerEvents = 'auto';
 
   const shadow = host.attachShadow({ mode: 'closed' });
   createPlayerDOM(shadow);

@@ -580,6 +580,7 @@ chrome.runtime.onMessage.addListener(
       switch (message.type) {
         case 'TTS_START': {
           const article = message.data as ArticleData;
+          console.log('[VB] TTS_START received:', article.title, article.paragraphs?.length, 'paragraphs');
 
           // Cancel any existing playback
           playbackGeneration++;
@@ -627,11 +628,17 @@ chrome.runtime.onMessage.addListener(
               state.progress = progress;
               broadcastState();
             });
+            console.log('[VB] TTS initialized, starting playback loop');
             state.status = 'generating';
             broadcastState();
-            playbackLoop();
+            playbackLoop().then(() => {
+              console.log('[VB] Playback loop exited');
+            }).catch((e) => {
+              console.error('[VB] Playback loop error:', e);
+            });
             sendResponse({ status: 'started' });
           } catch (e) {
+            console.error('[VB] TTS init failed:', e);
             state.status = 'error';
             state.error = `Failed to initialize TTS: ${e}`;
             broadcastState();

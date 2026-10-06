@@ -260,12 +260,19 @@ function setVoice(voiceId: string, opts: { persist?: boolean; sync?: boolean } =
   if (!VOICES.some((v) => v.id === voiceId)) return;
   selectedVoice = voiceId;
 
+  // Update selected class on all chips
   document
     .querySelectorAll('[data-voice-id]')
     .forEach((el) => {
       const id = (el as HTMLElement).dataset.voiceId;
       el.classList.toggle('selected', id === voiceId);
     });
+
+  // Move selected voice chip to the front of each rail
+  [idleVoiceRail, playingVoiceRail].forEach((rail) => {
+    const chip = rail.querySelector(`[data-voice-id="${voiceId}"]`);
+    if (chip) rail.prepend(chip);
+  });
 
   if (persist) savePrefs();
   if (sync) {
@@ -387,7 +394,13 @@ function buildSpeedOption(speed: number): HTMLButtonElement {
 }
 
 function renderVoiceSelectors(): void {
-  VOICES.forEach((voice) => {
+  // Selected voice first, then the rest
+  const sorted = [...VOICES].sort((a, b) => {
+    if (a.id === selectedVoice) return -1;
+    if (b.id === selectedVoice) return 1;
+    return 0;
+  });
+  sorted.forEach((voice) => {
     idleVoiceRail.appendChild(buildVoiceChip(voice));
     playingVoiceRail.appendChild(buildVoiceChip(voice));
     welcomeVoiceGrid.appendChild(buildVoiceCard(voice));
