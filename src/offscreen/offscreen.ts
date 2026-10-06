@@ -569,7 +569,12 @@ chrome.runtime.onMessage.addListener(
         }
 
         case 'TTS_SET_SPEED': {
-          state.speed = message.data as number;
+          const newSpeed = message.data as number;
+          state.speed = newSpeed;
+          // Apply speed to currently playing source immediately
+          if (currentSource) {
+            currentSource.playbackRate.value = newSpeed;
+          }
           broadcastState();
           sendResponse({ status: 'speed_set', speed: state.speed });
           break;
@@ -579,19 +584,25 @@ chrome.runtime.onMessage.addListener(
           const newVoice = message.data as string;
           if (newVoice !== state.voice) {
             state.voice = newVoice;
-            // Clear in-memory audio queue so next generation uses new voice
+            // Clear in-memory audio queue — old voice buffers are useless
             audioQueue = new Array(paragraphs.length).fill(null);
-            // If currently playing, restart current paragraph with new voice
+
             if (isPlaying) {
+              // Stop current playback — resolves pending playBuffer promise
               stopCurrentPlayback();
               pausedAt = 0;
-              if (isPaused) {
-                isPaused = false;
-                state.status = 'playing';
-              }
-              // playbackLoop will regenerate with new voice
+
+              // Increment generation to cancel the old loop, restart fresh.
+              // This handles both playing and paused states — the new loop
+              // will re-generate the current paragraph with the new voice.
+              playbackGeneration++;
+              isPaused = false;
+              state.status = 'generating';
+              broadcastState();
+              playbackLoop();
+            } else {
+              broadcastState();
             }
-            broadcastState();
           }
           sendResponse({ status: 'voice_set', voice: state.voice });
           break;
