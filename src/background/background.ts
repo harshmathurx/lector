@@ -5,6 +5,28 @@ const OFFSCREEN_DOCUMENT_PATH = 'offscreen/offscreen.html';
 
 let creatingOffscreen: Promise<void> | null = null;
 let activeTabId: number | null = null;
+let offscreenReady = false;
+
+// Listen for the offscreen document's ready ping
+chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
+  if (message.type === 'OFFSCREEN_READY') {
+    offscreenReady = true;
+    sendResponse({ ok: true });
+    return true;
+  }
+  return false;
+});
+
+async function waitForOffscreenReady(timeoutMs = 5000): Promise<void> {
+  if (offscreenReady) return;
+  const start = Date.now();
+  while (!offscreenReady && Date.now() - start < timeoutMs) {
+    await new Promise((r) => setTimeout(r, 50));
+  }
+  if (!offscreenReady) {
+    console.warn('[VB-BG] Offscreen did not send ready ping within timeout');
+  }
+}
 
 async function ensureOffscreenDocument(): Promise<void> {
   const existingContexts = await chrome.runtime.getContexts({
@@ -20,6 +42,7 @@ async function ensureOffscreenDocument(): Promise<void> {
   });
   await creatingOffscreen;
   creatingOffscreen = null;
+  offscreenReady = false; // Will be set when offscreen sends OFFSCREEN_READY
 }
 
 async function closeOffscreenDocument(): Promise<void> {
@@ -120,6 +143,7 @@ chrome.runtime.onMessage.addListener(
           }
 
           await ensureOffscreenDocument();
+          await waitForOffscreenReady();
 
           // Load user's saved preferences
           const prefs = await chrome.storage.local.get(['defaultVoice', 'defaultSpeed']);
@@ -235,6 +259,12 @@ chrome.commands.onCommand.addListener(async (command) => {
     if (!article?.paragraphs?.length) return;
 
     await ensureOffscreenDocument();
+    await waitForOffscreenReady();
+
+    // Load user's saved preferences
+    const prefs = await chrome.storage.local.get(['defaultVoice', 'defaultSpeed']);
+    if (prefs.defaultVoice) article.voice = prefs.defaultVoice;
+    if (prefs.defaultSpeed) article.speed = prefs.defaultSpeed;
 
     try {
       await chrome.tabs.sendMessage(tab.id, {

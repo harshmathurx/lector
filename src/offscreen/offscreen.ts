@@ -558,8 +558,9 @@ const NOT_FOR_OFFSCREEN = new Set([
   'VB_UPDATE_STATE',
   'EXTRACT_ARTICLE',
   'START_READING',
-  'TTS_STATE_UPDATE', // our own broadcast
-  'TTS_PREVIEW_DONE', // our own broadcast
+  'TTS_STATE_UPDATE',
+  'TTS_PREVIEW_DONE',
+  'OFFSCREEN_READY',
 ]);
 
 chrome.runtime.onMessage.addListener(
@@ -834,3 +835,7 @@ chrome.runtime.onMessage.addListener(
     return true;
   }
 );
+
+// Signal to the background service worker that our listener is registered
+// and we're ready to receive messages.
+chrome.runtime.sendMessage({ type: 'OFFSCREEN_READY' }).catch(() => {});
