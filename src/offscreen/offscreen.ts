@@ -96,9 +96,8 @@ function openDB(): Promise<IDBDatabase> {
   });
 }
 
-function cacheKey(text: string, voice: string): string {
-  // Simple hash: voice + first 200 chars + length
-  return `${voice}:${text.length}:${text.substring(0, 200)}`;
+function cacheKey(text: string, voice: string, speed: number): string {
+  return `${voice}:${speed}:${text.length}:${text.substring(0, 200)}`;
 }
 
 async function getCachedAudio(key: string): Promise<Float32Array | null> {
@@ -288,30 +287,30 @@ async function initTTS(
 
 // ─── Audio Generation with Cache ────────────────────────────────────────────
 
-async function generateAudio(text: string, voice: string): Promise<AudioBuffer> {
-  const key = cacheKey(text, voice);
+async function generateAudio(text: string, voice: string, speed: number = 1.0): Promise<AudioBuffer> {
+  const key = cacheKey(text, voice, speed);
   const ctx = getAudioContext();
 
   // Check cache first
   const cached = await getCachedAudio(key);
   if (cached) {
     console.log('[VB] Cache hit:', text.substring(0, 40) + '...');
-    // Resample 24kHz cached audio to context sample rate
     return createBufferAtContextRate(ctx, cached, 24000);
   }
 
   if (!tts) throw new Error('TTS not initialized');
 
-  console.log('[VB] Generating:', text.substring(0, 40) + '...');
-  const audio = await tts.generate(text, { voice: voice as never });
+  console.log('[VB] Generating:', text.substring(0, 40) + '...', 'speed:', speed);
+  // Pass speed to Kokoro — it adjusts the model's inference directly,
+  // so the output is faster/slower WITHOUT pitch shift. This is the
+  // correct way to change TTS speed (unlike playbackRate which shifts pitch).
+  const audio = await tts.generate(text, { voice: voice as never, speed: speed as never });
 
   const modelRate = audio.sampling_rate || 24000;
-  const rawSamples = audio.audio; // Float32Array at modelRate
+  const rawSamples = audio.audio;
 
-  // Cache the raw samples
   setCachedAudio(key, rawSamples).catch(() => {});
 
-  // Resample to match AudioContext rate
   return createBufferAtContextRate(ctx, rawSamples, modelRate);
 }
 
@@ -388,7 +387,8 @@ function playBuffer(buffer: AudioBuffer, offset: number = 0): Promise<void> {
 
     const source = ctx.createBufferSource();
     source.buffer = buffer;
-    source.playbackRate.value = state.speed;
+    // Don't use playbackRate — it shifts pitch (Mickey Mouse effect).
+    // Speed is handled by Kokoro at generation time via the speed parameter.
     source.connect(gainNode!);
 
     playResolve = resolve;
@@ -444,7 +444,8 @@ async function playbackLoop(): Promise<void> {
       try {
         const generated = await generateAudio(
           paragraphs[currentParagraphIndex],
-          state.voice
+          state.voice,
+          state.speed
         );
         audioQueue[currentParagraphIndex] = generated;
       } catch (e) {
@@ -465,7 +466,7 @@ async function playbackLoop(): Promise<void> {
         currentParagraphIndex + 1 < paragraphs.length &&
         !audioQueue[currentParagraphIndex + 1]
       ) {
-        generateAudio(paragraphs[currentParagraphIndex + 1], state.voice)
+        generateAudio(paragraphs[currentParagraphIndex + 1], state.voice, state.speed)
           .then((nextBuffer) => {
             if (gen === playbackGeneration) {
               audioQueue[currentParagraphIndex + 1] = nextBuffer;
@@ -734,29 +735,25 @@ chrome.runtime.onMessage.addListener(
           }
 
           console.log('[VB] Speed change:', state.speed, '→', newSpeed);
+          state.speed = newSpeed;
 
-          if (isPlaying && !isPaused && currentBuffer) {
-            // Capture current position in buffer-seconds before stopping
-            const wallElapsed = audioContext ? audioContext.currentTime - playbackStartTime : 0;
-            const bufferPos = wallElapsed * state.speed;
+          // Speed is baked into the audio at generation time (Kokoro's
+          // speed parameter). Changing speed means we need to regenerate.
+          // Clear the audio queue and restart the current paragraph.
+          audioQueue = new Array(paragraphs.length).fill(null);
 
-            state.speed = newSpeed;
-
-            // Stop and restart current paragraph at the same position
-            // with the new speed. playbackRate on a live source causes
-            // pitch shift — restarting the source is cleaner for TTS.
+          if (isPlaying) {
+            playbackGeneration++;
             stopCurrentPlayback();
-            pausedAt = bufferPos;
-            isPaused = true;  // Enter pause state
-            isPaused = false; // Immediately resume — loop replays from pausedAt
-            state.status = 'playing';
+            stopTimeUpdates();
+            pausedAt = 0;
+            isPaused = false;
+            currentBuffer = null;
+            state.status = 'generating';
             broadcastState();
-          } else if (isPaused && currentBuffer) {
-            // Paused — just update the speed, next resume will use it
-            state.speed = newSpeed;
-            broadcastState();
+            await new Promise((r) => setTimeout(r, 0));
+            playbackLoop();
           } else {
-            state.speed = newSpeed;
             broadcastState();
           }
 

@@ -383,14 +383,21 @@ async function init(): Promise<void> {
     }
   });
 
-  // Check if already playing
+  // Check if already playing — only if an offscreen document exists
   try {
-    const state = await chrome.runtime.sendMessage({ type: 'TTS_GET_STATE' });
-    if (state && state.status !== 'idle') {
-      latestState = state;
-      updatePlayerUI(state);
+    const contexts = await chrome.runtime.getContexts({
+      contextTypes: [chrome.runtime.ContextType.OFFSCREEN_DOCUMENT],
+    });
+    if (contexts.length > 0) {
+      const state = await chrome.runtime.sendMessage({ type: 'TTS_GET_STATE' });
+      if (state && state.status !== 'idle') {
+        latestState = state;
+        updatePlayerUI(state);
+      }
     }
-  } catch {}
+  } catch {
+    // No offscreen document — nothing playing, show idle
+  }
 
   // Listen for state updates
   chrome.runtime.onMessage.addListener((message) => {
