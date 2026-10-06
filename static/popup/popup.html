@@ -47,13 +47,8 @@
       }
     }
 
-    /* Chrome draws the popup in a rounded frame. Leave the page transparent so
-       the frame shows at the corners, and paint our panel with the same radius
-       so no sharp rectangle peeks out (most visible in dark mode). */
-    :root { color-scheme: light dark; }
-    html { background: transparent; }
+    html, body { background: var(--bg); }
     body {
-      background: var(--bg); border-radius: var(--r-frame, 12px);
       width: 380px; min-height: 500px; position: relative; overflow: hidden;
       font-family: var(--ui); font-size: 13px; color: var(--ink); -webkit-font-smoothing: antialiased;
     }
@@ -238,7 +233,7 @@
 
     /* ─── Sheets (voice picker, settings) ─── */
     .sheet {
-      position: absolute; inset: 0; background: var(--bg); z-index: 10; border-radius: inherit;
+      position: absolute; inset: 0; background: var(--bg); z-index: 10;
       display: flex; flex-direction: column; animation: slide .18s ease;
     }
     @keyframes slide { from { transform: translateY(12px); opacity: 0; } }
@@ -356,7 +351,7 @@
 
       <div class="tips">
         <div class="tip"><span><kbd>Alt</kbd> <kbd>Shift</kbd> <kbd>R</kbd></span><span>Start or pause from any tab</span></div>
-        <div class="tip"><span><kbd>Right-click</kbd></span><span>Select text, then <b>Read aloud from here</b></span></div>
+        <div class="tip"><span><kbd>Right-click</kbd></span><span>Select text, then <b>Listen from here</b></span></div>
       </div>
     </div>
 
