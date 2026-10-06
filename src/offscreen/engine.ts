@@ -1,125 +1,106 @@
-// Kokoro TTS engine. The heavy libraries (ONNX Runtime + kokoro-js, ~5MB) are
-// imported lazily so a failure to evaluate them is a catchable error instead
-// of silently killing the whole offscreen document.
-
-const MODEL_ID = 'onnx-community/Kokoro-82M-v1.0-ONNX';
+// Client for the TTS engine worker (engine.worker.ts). Keeps the same small
+// surface the player uses: ensureEngine / synthesize / isEngineReady / engineDevice.
 
 export interface Speech {
   samples: Float32Array;
   sampleRate: number;
 }
 
-interface KokoroLike {
-  generate(
-    text: string,
-    opts: { voice: string; speed: number }
-  ): Promise<{ audio: Float32Array; sampling_rate: number }>;
-}
+export type WorkerRequest =
+  | { type: 'load'; wasmBase: string }
+  | { type: 'generate'; id: number; text: string; voice: string; speed: number };
+
+export type WorkerResponse =
+  | { type: 'progress'; fraction: number }
+  | { type: 'ready'; device: 'webgpu' | 'wasm' }
+  | { type: 'audio'; id: number; samples: Float32Array; sampleRate: number }
+  | { type: 'error'; id?: number; message: string };
 
 type Device = 'webgpu' | 'wasm';
 
-let kokoro: KokoroLike | null = null;
+let worker: Worker | null = null;
 let device: Device | null = null;
 let loading: Promise<void> | null = null;
 let progressListener: (fraction: number) => void = () => {};
-
-// Only one inference may run at a time on a single ONNX session.
-let queue: Promise<unknown> = Promise.resolve();
+let nextId = 1;
+const pending = new Map<number, { resolve: (s: Speech) => void; reject: (e: Error) => void }>();
+let loadSettle: { resolve: () => void; reject: (e: Error) => void } | null = null;
 
 export function engineDevice(): Device | null {
   return device;
 }
 
 export function isEngineReady(): boolean {
-  return kokoro !== null;
+  return device !== null;
 }
 
-async function hasWebGPU(): Promise<boolean> {
-  const gpu = (navigator as unknown as { gpu?: { requestAdapter(): Promise<unknown> } }).gpu;
-  if (!gpu) return false;
-  try {
-    return (await gpu.requestAdapter()) !== null;
-  } catch {
-    return false;
-  }
-}
-
-async function loadModel(want: Device): Promise<void> {
-  const onProgress = (f: number) => progressListener(f);
-  // wasm paths must be set on the ONNX runtime before kokoro-js touches it.
-  const ort = await import('onnxruntime-web');
-  const base = chrome.runtime.getURL('wasm/');
-  (ort.env.wasm as unknown as { wasmPaths: unknown }).wasmPaths = {
-    mjs: `${base}ort-wasm-simd-threaded.jsep.mjs`,
-    wasm: `${base}ort-wasm-simd-threaded.jsep.wasm`,
-  };
-  const { KokoroTTS } = await import('kokoro-js');
-
-  const files = new Map<string, number>();
-  let totalFiles = 0;
-  const progress_callback = (p: { status: string; progress?: number; file?: string }) => {
-    if (p.status === 'progress' && p.file) {
-      files.set(p.file, p.progress ?? 0);
-      totalFiles = Math.max(totalFiles, files.size);
-      let sum = 0;
-      for (const v of files.values()) sum += v;
-      onProgress(Math.min(sum / Math.max(totalFiles, 1) / 100, 0.99));
+function spawn(): Worker {
+  const w = new Worker(chrome.runtime.getURL('offscreen/engine.worker.js'), { type: 'module' });
+  w.onmessage = (e: MessageEvent<WorkerResponse>) => {
+    const m = e.data;
+    switch (m.type) {
+      case 'progress':
+        progressListener(m.fraction);
+        break;
+      case 'ready':
+        device = m.device;
+        progressListener(1);
+        loadSettle?.resolve();
+        loadSettle = null;
+        break;
+      case 'audio':
+        pending.get(m.id)?.resolve({ samples: m.samples, sampleRate: m.sampleRate });
+        pending.delete(m.id);
+        break;
+      case 'error':
+        if (m.id !== undefined) {
+          pending.get(m.id)?.reject(new Error(m.message));
+          pending.delete(m.id);
+        } else {
+          loadSettle?.reject(new Error(m.message));
+          loadSettle = null;
+        }
+        break;
     }
   };
-
-  kokoro = (await KokoroTTS.from_pretrained(MODEL_ID, {
-    dtype: want === 'webgpu' ? 'fp32' : 'q8',
-    device: want,
-    progress_callback,
-  })) as unknown as KokoroLike;
-  device = want;
-  onProgress(1);
+  w.onerror = (e) => {
+    // The worker script itself failed to start or crashed.
+    const err = new Error(e.message || 'Engine worker crashed');
+    loadSettle?.reject(err);
+    loadSettle = null;
+    for (const p of pending.values()) p.reject(err);
+    pending.clear();
+    worker = null;
+    device = null;
+  };
+  return w;
 }
 
-/** Load the model once. WebGPU first, WASM as the fallback. */
+/** Load the model once. WebGPU first, WASM as the fallback (decided in the worker). */
 export function ensureEngine(onProgress: (fraction: number) => void): Promise<void> {
   progressListener = onProgress;
-  if (kokoro) return Promise.resolve();
+  if (device) return Promise.resolve();
   if (loading) return loading;
-  loading = (async () => {
-    try {
-      if (await hasWebGPU()) {
-        try {
-          await loadModel('webgpu');
-          return;
-        } catch (e) {
-          console.warn('[VB] WebGPU load failed, falling back to WASM:', e);
-        }
-      }
-      await loadModel('wasm');
-    } finally {
-      loading = null;
-    }
-  })();
+  loading = new Promise<void>((resolve, reject) => {
+    loadSettle = { resolve, reject };
+    worker ??= spawn();
+    const req: WorkerRequest = { type: 'load', wasmBase: chrome.runtime.getURL('wasm/') };
+    worker.postMessage(req);
+  }).finally(() => {
+    loading = null;
+  });
   return loading;
 }
 
-async function run(text: string, voice: string, speed: number): Promise<Speech> {
-  if (!kokoro) throw new Error('Engine not loaded');
-  const out = await kokoro.generate(text, { voice, speed });
-  return { samples: out.audio, sampleRate: out.sampling_rate || 24000 };
-}
-
 export function synthesize(text: string, voice: string, speed: number): Promise<Speech> {
-  const job = queue.then(async () => {
-    try {
-      return await run(text, voice, speed);
-    } catch (e) {
-      // WebGPU can fail at inference time (driver issues). Drop to WASM once.
-      if (device === 'webgpu') {
-        console.warn('[VB] WebGPU inference failed, reloading on WASM:', e);
-        kokoro = null;
-        await loadModel('wasm');
-        return run(text, voice, speed);
-      }
-      throw e;
+  return new Promise((resolve, reject) => {
+    if (!worker || !device) {
+      reject(new Error('Engine not loaded'));
+      return;
     }
+    const id = nextId++;
+    pending.set(id, { resolve, reject });
+    const req: WorkerRequest = { type: 'generate', id, text, voice, speed };
+    worker.postMessage(req);
   });
-  queue = job.catch(() => {});
-  return job;
 }

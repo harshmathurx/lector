@@ -4,9 +4,9 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "build": "bun build ./src/popup/popup.ts --outdir dist/popup --target browser && bun build ./src/content/content.ts --outdir dist/content --target browser && bun build ./src/background/background.ts --outdir dist/background --target browser && bun build ./src/offscreen/offscreen.ts --outdir dist/offscreen --target browser && cp -r static/* dist/",
+    "build": "bun build ./src/popup/popup.ts --outdir dist/popup --target browser && bun build ./src/content/content.ts --outdir dist/content --target browser && bun build ./src/background/background.ts --outdir dist/background --target browser && bun build ./src/offscreen/offscreen.ts --outdir dist/offscreen --target browser && bun build ./src/offscreen/engine.worker.ts --outdir dist/offscreen --target browser && cp -r static/* dist/",
     "dev": "bun run build",
-    "watch": "bun build ./src/popup/popup.ts --outdir dist/popup --target browser --watch & bun build ./src/content/content.ts --outdir dist/content --target browser --watch & bun build ./src/background/background.ts --outdir dist/background --target browser --watch & bun build ./src/offscreen/offscreen.ts --outdir dist/offscreen --target browser --watch",
+    "watch": "bun build ./src/popup/popup.ts --outdir dist/popup --target browser --watch & bun build ./src/content/content.ts --outdir dist/content --target browser --watch & bun build ./src/background/background.ts --outdir dist/background --target browser --watch & bun build ./src/offscreen/offscreen.ts --outdir dist/offscreen --target browser --watch & bun build ./src/offscreen/engine.worker.ts --outdir dist/offscreen --target browser --watch",
     "typecheck": "tsc --noEmit -p .",
     "test": "bun test src"
   },
