@@ -51,6 +51,7 @@ chrome.runtime.onMessage.addListener(
     (async () => {
       switch (message.type) {
         case 'START_READING': {
+          console.log('[VB-BG] START_READING received');
           const [tab] = await chrome.tabs.query({
             active: true,
             currentWindow: true,
@@ -59,22 +60,28 @@ chrome.runtime.onMessage.addListener(
             sendResponse({ error: 'No active tab' });
             return;
           }
+          console.log('[VB-BG] Active tab:', tab.id, tab.url);
 
           let article = null;
           try {
             article = await chrome.tabs.sendMessage(tab.id, {
               type: 'EXTRACT_ARTICLE',
             });
-          } catch {
+            console.log('[VB-BG] Got article from content script:', article?.paragraphs?.length, 'paragraphs');
+          } catch (firstErr) {
+            console.log('[VB-BG] Content script not responding, injecting...', firstErr);
             try {
               await chrome.scripting.executeScript({
                 target: { tabId: tab.id },
                 files: ['content/content.js'],
               });
+              console.log('[VB-BG] Content script injected, retrying...');
               article = await chrome.tabs.sendMessage(tab.id, {
                 type: 'EXTRACT_ARTICLE',
               });
-            } catch {
+              console.log('[VB-BG] Got article after injection:', article?.paragraphs?.length, 'paragraphs');
+            } catch (injectErr) {
+              console.error('[VB-BG] Injection failed:', injectErr);
               sendResponse({
                 error: 'Cannot read this page. Try refreshing the tab.',
               });

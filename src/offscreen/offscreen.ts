@@ -1,6 +1,8 @@
 // Offscreen document — runs Kokoro TTS engine and plays audio.
 // The only context with Web Audio API access in MV3.
 
+console.log('[VB] Offscreen document starting...');
+
 // ─── ONNX/WASM Setup (must be first — before kokoro-js import) ─────────────
 
 import { env as ortEnv } from 'onnxruntime-web';
@@ -12,6 +14,8 @@ ortEnv.wasm.wasmPaths = {
 } as never;
 
 import { KokoroTTS } from 'kokoro-js';
+
+console.log('[VB] Imports loaded successfully');
 
 // ─── Types ──────────────────────────────────────────────────────────────────
 
@@ -152,18 +156,24 @@ async function setCachedAudio(key: string, audio: Float32Array): Promise<void> {
 let defaultVoice = 'af_heart';
 let defaultSpeed = 1.0;
 
-// Fire-and-forget — settings are applied to state once loaded. If a TTS_START
-// arrives before this resolves, its explicit voice/speed overrides win anyway.
-chrome.storage.local.get(['defaultVoice', 'defaultSpeed'], (result) => {
-  if (typeof result.defaultVoice === 'string' && result.defaultVoice) {
-    defaultVoice = result.defaultVoice;
-    state.voice = defaultVoice;
+// Load saved settings. Deferred because chrome.storage may not be available
+// at module evaluation time in offscreen documents.
+function loadSettings(): void {
+  try {
+    chrome.storage.local.get(['defaultVoice', 'defaultSpeed'], (result) => {
+      if (typeof result.defaultVoice === 'string' && result.defaultVoice) {
+        defaultVoice = result.defaultVoice;
+        state.voice = defaultVoice;
+      }
+      if (typeof result.defaultSpeed === 'number' && result.defaultSpeed > 0) {
+        defaultSpeed = result.defaultSpeed;
+        state.speed = defaultSpeed;
+      }
+    });
+  } catch (e) {
+    console.warn('[VB] Could not load settings:', e);
   }
-  if (typeof result.defaultSpeed === 'number' && result.defaultSpeed > 0) {
-    defaultSpeed = result.defaultSpeed;
-    state.speed = defaultSpeed;
-  }
-});
+}
 
 // ─── State ──────────────────────────────────────────────────────────────────
 
@@ -595,9 +605,13 @@ chrome.runtime.onMessage.addListener(
         case 'TTS_PAUSE': {
           if (isPlaying && !isPaused) {
             isPaused = true;
-            // Record where we stopped so we can resume from this offset
+            // pausedAt is in BUFFER-seconds (not wall-clock).
+            // audioContext.currentTime - playbackStartTime gives wall-clock
+            // elapsed seconds. Divide by playbackRate to get buffer position.
             if (audioContext && currentBuffer) {
-              pausedAt = audioContext.currentTime - playbackStartTime;
+              const wallElapsed = audioContext.currentTime - playbackStartTime;
+              pausedAt = wallElapsed * state.speed;
+              console.log('[VB] Paused at', pausedAt.toFixed(2), 'buffer-seconds (wall:', wallElapsed.toFixed(2), 'speed:', state.speed, ')');
             }
             stopCurrentPlayback();
             stopTimeUpdates();
@@ -611,9 +625,9 @@ chrome.runtime.onMessage.addListener(
         case 'TTS_RESUME': {
           if (isPaused) {
             isPaused = false;
-            // Don't set state to 'playing' here — the playbackLoop
-            // will pick up from the pause wait and resume.
-            // It will set state to 'generating' then 'playing'.
+            console.log('[VB] Resuming from', pausedAt.toFixed(2), 'buffer-seconds');
+            // playbackLoop will pick up from the pause wait and replay
+            // the current buffer starting at pausedAt offset.
             broadcastState();
           }
           sendResponse({ status: 'resumed' });
@@ -714,12 +728,38 @@ chrome.runtime.onMessage.addListener(
 
         case 'TTS_SET_SPEED': {
           const newSpeed = message.data as number;
-          state.speed = newSpeed;
-          // Apply speed to currently playing source immediately
-          if (currentSource) {
-            currentSource.playbackRate.value = newSpeed;
+          if (newSpeed === state.speed) {
+            sendResponse({ status: 'speed_set', speed: state.speed });
+            break;
           }
-          broadcastState();
+
+          console.log('[VB] Speed change:', state.speed, '→', newSpeed);
+
+          if (isPlaying && !isPaused && currentBuffer) {
+            // Capture current position in buffer-seconds before stopping
+            const wallElapsed = audioContext ? audioContext.currentTime - playbackStartTime : 0;
+            const bufferPos = wallElapsed * state.speed;
+
+            state.speed = newSpeed;
+
+            // Stop and restart current paragraph at the same position
+            // with the new speed. playbackRate on a live source causes
+            // pitch shift — restarting the source is cleaner for TTS.
+            stopCurrentPlayback();
+            pausedAt = bufferPos;
+            isPaused = true;  // Enter pause state
+            isPaused = false; // Immediately resume — loop replays from pausedAt
+            state.status = 'playing';
+            broadcastState();
+          } else if (isPaused && currentBuffer) {
+            // Paused — just update the speed, next resume will use it
+            state.speed = newSpeed;
+            broadcastState();
+          } else {
+            state.speed = newSpeed;
+            broadcastState();
+          }
+
           sendResponse({ status: 'speed_set', speed: state.speed });
           break;
         }
@@ -727,22 +767,28 @@ chrome.runtime.onMessage.addListener(
         case 'TTS_SET_VOICE': {
           const newVoice = message.data as string;
           if (newVoice !== state.voice) {
+            console.log('[VB] Voice change:', state.voice, '→', newVoice);
             state.voice = newVoice;
             // Clear in-memory audio queue — old voice buffers are useless
             audioQueue = new Array(paragraphs.length).fill(null);
 
             if (isPlaying) {
-              // Stop current playback — resolves pending playBuffer promise
-              stopCurrentPlayback();
-              pausedAt = 0;
-
-              // Increment generation to cancel the old loop, restart fresh.
-              // This handles both playing and paused states — the new loop
-              // will re-generate the current paragraph with the new voice.
+              // Stop current playback and cancel the old loop
               playbackGeneration++;
+              stopCurrentPlayback();
+              stopTimeUpdates();
+              pausedAt = 0;
               isPaused = false;
+              currentBuffer = null;
               state.status = 'generating';
               broadcastState();
+
+              // Let the old loop fully exit before starting a new one.
+              // The old loop's playBuffer promise was resolved by
+              // stopCurrentPlayback, and it will exit when it checks
+              // gen !== playbackGeneration. We yield so it can finish.
+              await new Promise((r) => setTimeout(r, 0));
+
               playbackLoop();
             } else {
               broadcastState();
@@ -848,10 +894,29 @@ async function handleTTSStart(article: ArticleData): Promise<void> {
 }
 
 (async function checkPendingJob() {
+  // Retry until chrome.storage is available (offscreen documents may not
+  // have the full extension API at module evaluation time)
+  let retries = 0;
+  while (retries < 50) {
+    try {
+      if (chrome?.storage?.local) break;
+    } catch {}
+    await new Promise((r) => setTimeout(r, 100));
+    retries++;
+  }
+
+  if (!chrome?.storage?.local) {
+    console.error('[VB] chrome.storage.local not available after 5s');
+    return;
+  }
+
+  console.log('[VB] Chrome APIs ready, checking for pending job...');
+  loadSettings();
+
   try {
     const result = await chrome.storage.local.get('pendingJob');
     const job = result.pendingJob;
-    if (job && job.type === 'TTS_START' && Date.now() - job.timestamp < 10000) {
+    if (job && job.type === 'TTS_START' && Date.now() - job.timestamp < 30000) {
       console.log('[VB] Found pending job, starting...');
       await chrome.storage.local.remove('pendingJob');
       await handleTTSStart(job.data as ArticleData);
