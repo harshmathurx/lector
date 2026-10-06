@@ -3,12 +3,6 @@
 
 // ─── Types ──────────────────────────────────────────────────────────────────
 
-interface Voice {
-  id: string;
-  name: string;
-  tag: string;
-}
-
 interface TTSState {
   status: 'idle' | 'loading' | 'generating' | 'playing' | 'paused' | 'error';
   progress: number;
@@ -25,61 +19,69 @@ interface TTSState {
 
 // ─── Voices ─────────────────────────────────────────────────────────────────
 
+interface Voice {
+  id: string;
+  name: string;
+  tag: string;
+  lang: string; // 'en' for English voices, others for their language
+}
+
 const VOICES: Voice[] = [
-  { id: 'af_heart', name: 'Heart', tag: 'US ♀' },
-  { id: 'af_alloy', name: 'Alloy', tag: 'US ♀' },
-  { id: 'af_aoede', name: 'Aoede', tag: 'US ♀' },
-  { id: 'af_bella', name: 'Bella', tag: 'US ♀' },
-  { id: 'af_jessica', name: 'Jessica', tag: 'US ♀' },
-  { id: 'af_kore', name: 'Kore', tag: 'US ♀' },
-  { id: 'af_nicole', name: 'Nicole', tag: 'US ♀' },
-  { id: 'af_nova', name: 'Nova', tag: 'US ♀' },
-  { id: 'af_river', name: 'River', tag: 'US ♀' },
-  { id: 'af_sarah', name: 'Sarah', tag: 'US ♀' },
-  { id: 'af_sky', name: 'Sky', tag: 'US ♀' },
-  { id: 'am_adam', name: 'Adam', tag: 'US ♂' },
-  { id: 'am_echo', name: 'Echo', tag: 'US ♂' },
-  { id: 'am_eric', name: 'Eric', tag: 'US ♂' },
-  { id: 'am_fenrir', name: 'Fenrir', tag: 'US ♂' },
-  { id: 'am_liam', name: 'Liam', tag: 'US ♂' },
-  { id: 'am_michael', name: 'Michael', tag: 'US ♂' },
-  { id: 'am_onyx', name: 'Onyx', tag: 'US ♂' },
-  { id: 'am_puck', name: 'Puck', tag: 'US ♂' },
-  { id: 'am_santa', name: 'Santa', tag: 'US ♂' },
-  { id: 'bf_alice', name: 'Alice', tag: 'UK ♀' },
-  { id: 'bf_emma', name: 'Emma', tag: 'UK ♀' },
-  { id: 'bf_isabella', name: 'Isabella', tag: 'UK ♀' },
-  { id: 'bf_lily', name: 'Lily', tag: 'UK ♀' },
-  { id: 'bm_daniel', name: 'Daniel', tag: 'UK ♂' },
-  { id: 'bm_fable', name: 'Fable', tag: 'UK ♂' },
-  { id: 'bm_george', name: 'George', tag: 'UK ♂' },
-  { id: 'bm_lewis', name: 'Lewis', tag: 'UK ♂' },
-  { id: 'jf_alpha', name: 'Alpha', tag: 'JP ♀' },
-  { id: 'jf_gongitsune', name: 'Gongitsune', tag: 'JP ♀' },
-  { id: 'jf_nezumi', name: 'Nezumi', tag: 'JP ♀' },
-  { id: 'jf_tebukuro', name: 'Tebukuro', tag: 'JP ♀' },
-  { id: 'jm_kumo', name: 'Kumo', tag: 'JP ♂' },
-  { id: 'zf_xiaobei', name: 'Xiaobei', tag: 'CN ♀' },
-  { id: 'zf_xiaoni', name: 'Xiaoni', tag: 'CN ♀' },
-  { id: 'zf_xiaoxiao', name: 'Xiaoxiao', tag: 'CN ♀' },
-  { id: 'zf_xiaoyi', name: 'Xiaoyi', tag: 'CN ♀' },
-  { id: 'zm_yunjian', name: 'Yunjian', tag: 'CN ♂' },
-  { id: 'zm_yunxi', name: 'Yunxi', tag: 'CN ♂' },
-  { id: 'zm_yunxia', name: 'Yunxia', tag: 'CN ♂' },
-  { id: 'zm_yunyang', name: 'Yunyang', tag: 'CN ♂' },
-  { id: 'ef_dora', name: 'Dora', tag: 'ES ♀' },
-  { id: 'em_alex', name: 'Alex', tag: 'ES ♂' },
-  { id: 'em_santa', name: 'Santa', tag: 'ES ♂' },
-  { id: 'ff_siwis', name: 'Siwis', tag: 'FR ♀' },
-  { id: 'hf_alpha', name: 'Alpha', tag: 'IN ♀' },
-  { id: 'hf_beta', name: 'Beta', tag: 'IN ♀' },
-  { id: 'hm_omega', name: 'Omega', tag: 'IN ♂' },
-  { id: 'hm_psi', name: 'Psi', tag: 'IN ♂' },
-  { id: 'if_sara', name: 'Sara', tag: 'IT ♀' },
-  { id: 'im_nicola', name: 'Nicola', tag: 'IT ♂' },
-  { id: 'pf_dora', name: 'Dora', tag: 'BR ♀' },
-  { id: 'pm_alex', name: 'Alex', tag: 'BR ♂' },
-  { id: 'pm_santa', name: 'Santa', tag: 'BR ♂' },
+  { id: 'af_heart', name: 'Heart', tag: 'US ♀', lang: 'en' },
+  { id: 'af_alloy', name: 'Alloy', tag: 'US ♀', lang: 'en' },
+  { id: 'af_aoede', name: 'Aoede', tag: 'US ♀', lang: 'en' },
+  { id: 'af_bella', name: 'Bella', tag: 'US ♀', lang: 'en' },
+  { id: 'af_jessica', name: 'Jessica', tag: 'US ♀', lang: 'en' },
+  { id: 'af_kore', name: 'Kore', tag: 'US ♀', lang: 'en' },
+  { id: 'af_nicole', name: 'Nicole', tag: 'US ♀', lang: 'en' },
+  { id: 'af_nova', name: 'Nova', tag: 'US ♀', lang: 'en' },
+  { id: 'af_river', name: 'River', tag: 'US ♀', lang: 'en' },
+  { id: 'af_sarah', name: 'Sarah', tag: 'US ♀', lang: 'en' },
+  { id: 'af_sky', name: 'Sky', tag: 'US ♀', lang: 'en' },
+  { id: 'am_adam', name: 'Adam', tag: 'US ♂', lang: 'en' },
+  { id: 'am_echo', name: 'Echo', tag: 'US ♂', lang: 'en' },
+  { id: 'am_eric', name: 'Eric', tag: 'US ♂', lang: 'en' },
+  { id: 'am_fenrir', name: 'Fenrir', tag: 'US ♂', lang: 'en' },
+  { id: 'am_liam', name: 'Liam', tag: 'US ♂', lang: 'en' },
+  { id: 'am_michael', name: 'Michael', tag: 'US ♂', lang: 'en' },
+  { id: 'am_onyx', name: 'Onyx', tag: 'US ♂', lang: 'en' },
+  { id: 'am_puck', name: 'Puck', tag: 'US ♂', lang: 'en' },
+  { id: 'am_santa', name: 'Santa', tag: 'US ♂', lang: 'en' },
+  { id: 'bf_alice', name: 'Alice', tag: 'UK ♀', lang: 'en' },
+  { id: 'bf_emma', name: 'Emma', tag: 'UK ♀', lang: 'en' },
+  { id: 'bf_isabella', name: 'Isabella', tag: 'UK ♀', lang: 'en' },
+  { id: 'bf_lily', name: 'Lily', tag: 'UK ♀', lang: 'en' },
+  { id: 'bm_daniel', name: 'Daniel', tag: 'UK ♂', lang: 'en' },
+  { id: 'bm_fable', name: 'Fable', tag: 'UK ♂', lang: 'en' },
+  { id: 'bm_george', name: 'George', tag: 'UK ♂', lang: 'en' },
+  { id: 'bm_lewis', name: 'Lewis', tag: 'UK ♂', lang: 'en' },
+  // Non-English voices — these only work with text in their language
+  { id: 'jf_alpha', name: 'Alpha', tag: 'JP ♀', lang: 'ja' },
+  { id: 'jf_gongitsune', name: 'Gongitsune', tag: 'JP ♀', lang: 'ja' },
+  { id: 'jf_nezumi', name: 'Nezumi', tag: 'JP ♀', lang: 'ja' },
+  { id: 'jf_tebukuro', name: 'Tebukuro', tag: 'JP ♀', lang: 'ja' },
+  { id: 'jm_kumo', name: 'Kumo', tag: 'JP ♂', lang: 'ja' },
+  { id: 'zf_xiaobei', name: 'Xiaobei', tag: 'CN ♀', lang: 'zh' },
+  { id: 'zf_xiaoni', name: 'Xiaoni', tag: 'CN ♀', lang: 'zh' },
+  { id: 'zf_xiaoxiao', name: 'Xiaoxiao', tag: 'CN ♀', lang: 'zh' },
+  { id: 'zf_xiaoyi', name: 'Xiaoyi', tag: 'CN ♀', lang: 'zh' },
+  { id: 'zm_yunjian', name: 'Yunjian', tag: 'CN ♂', lang: 'zh' },
+  { id: 'zm_yunxi', name: 'Yunxi', tag: 'CN ♂', lang: 'zh' },
+  { id: 'zm_yunxia', name: 'Yunxia', tag: 'CN ♂', lang: 'zh' },
+  { id: 'zm_yunyang', name: 'Yunyang', tag: 'CN ♂', lang: 'zh' },
+  { id: 'ef_dora', name: 'Dora', tag: 'ES ♀', lang: 'es' },
+  { id: 'em_alex', name: 'Alex', tag: 'ES ♂', lang: 'es' },
+  { id: 'em_santa', name: 'Santa', tag: 'ES ♂', lang: 'es' },
+  { id: 'ff_siwis', name: 'Siwis', tag: 'FR ♀', lang: 'fr' },
+  { id: 'hf_alpha', name: 'Alpha', tag: 'IN ♀', lang: 'hi' },
+  { id: 'hf_beta', name: 'Beta', tag: 'IN ♀', lang: 'hi' },
+  { id: 'hm_omega', name: 'Omega', tag: 'IN ♂', lang: 'hi' },
+  { id: 'hm_psi', name: 'Psi', tag: 'IN ♂', lang: 'hi' },
+  { id: 'if_sara', name: 'Sara', tag: 'IT ♀', lang: 'it' },
+  { id: 'im_nicola', name: 'Nicola', tag: 'IT ♂', lang: 'it' },
+  { id: 'pf_dora', name: 'Dora', tag: 'BR ♀', lang: 'pt' },
+  { id: 'pm_alex', name: 'Alex', tag: 'BR ♂', lang: 'pt' },
+  { id: 'pm_santa', name: 'Santa', tag: 'BR ♂', lang: 'pt' },
 ];
 
 const SPEEDS = [0.75, 1, 1.25, 1.5, 2];
@@ -185,6 +187,12 @@ function updateSelectedChips(): void {
 function setVoice(voiceId: string): void {
   selectedVoice = voiceId;
   updateSelectedChips();
+
+  // Warn if selecting a non-English voice
+  const voice = VOICES.find((v) => v.id === voiceId);
+  if (voice && voice.lang !== 'en') {
+    showError(`${voice.name} is a ${voice.tag.split(' ')[0]} voice — it works best with ${voice.lang} text, not English.`);
+  }
 
   // Move selected chip to front of each rail
   [idleVoiceRail, playingVoiceRail].forEach((rail) => {
