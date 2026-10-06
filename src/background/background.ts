@@ -175,6 +175,9 @@ async function recoverSession(session: StoredSession): Promise<void> {
 // ─── Commands ───────────────────────────────────────────────────────────────
 
 async function runCommand(command: Command): Promise<PlayerState> {
+  // Remember voice/speed choices so a recovered session keeps them.
+  if (command.cmd === 'voice') await chrome.storage.local.set({ defaultVoice: command.voice });
+  if (command.cmd === 'speed') await chrome.storage.local.set({ defaultSpeed: command.speed });
   if (!(await hasOffscreen())) {
     const session = await loadSession();
     if (session && (command.cmd === 'toggle' || command.cmd === 'resume')) {
@@ -278,6 +281,7 @@ async function onOffscreenEvent(event: OffscreenEvent): Promise<void> {
     case 'playing':
       setBadge('');
       await chrome.alarms.clear(IDLE_CLOSE_ALARM);
+      await chrome.storage.local.set({ modelReady: true });
       break;
     case 'loading':
     case 'buffering':
@@ -333,6 +337,17 @@ chrome.runtime.onMessage.addListener((raw: unknown, _sender, sendResponse) => {
         case 'VB_JUMP':
           sendResponse(await runCommand({ cmd: 'jump', paragraph: message.paragraph }));
           break;
+        case 'VB_WARM': {
+          // Only when the model is already on disk, and nothing is playing.
+          const { modelReady } = await chrome.storage.local.get('modelReady');
+          if (modelReady && (await getState()).status === 'idle') {
+            await ensureOffscreen();
+            await sendToOffscreen({ target: 'offscreen', type: 'TTS_WARM' });
+            await chrome.alarms.create(IDLE_CLOSE_ALARM, { delayInMinutes: IDLE_CLOSE_MINUTES });
+          }
+          sendResponse({ ok: true });
+          break;
+        }
         case 'VB_CLEAR_CACHE': {
           let cleared = 0;
           if (await hasOffscreen()) {

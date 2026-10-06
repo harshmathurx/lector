@@ -538,6 +538,12 @@ chrome.runtime.onMessage.addListener((message: OffscreenRequest, _sender, sendRe
     case 'TTS_GET_STATE':
       sendResponse(getState());
       return false;
+    case 'TTS_WARM':
+      // Preload the model so the next "listen" starts instantly. Failure is
+      // fine here: the real start will retry and report the error.
+      if (!isEngineReady()) void ensureEngine(() => {}).catch(() => {});
+      sendResponse({ ok: true });
+      return false;
     case 'TTS_CLEAR_CACHE':
       void cacheClear().then((cleared) => sendResponse({ cleared }));
       return true;

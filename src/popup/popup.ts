@@ -454,6 +454,7 @@ async function init(): Promise<void> {
   await poll();
   render();
   setInterval(poll, 300);
+  if (state.status === 'idle') void request({ type: 'VB_WARM' });
 }
 
 void init();

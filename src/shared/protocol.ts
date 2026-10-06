@@ -87,6 +87,7 @@ export type BackgroundRequest =
   | { type: 'VB_CMD'; command: Command }
   | { type: 'VB_GET_STATE' }
   | { type: 'VB_CLEAR_CACHE' }
+  | { type: 'VB_WARM' }
   | { type: 'VB_JUMP'; paragraph: number };
 
 /** anything -> offscreen (always tagged with target) */
@@ -101,7 +102,8 @@ export type OffscreenRequest =
     }
   | { target: 'offscreen'; type: 'TTS_COMMAND'; command: Command }
   | { target: 'offscreen'; type: 'TTS_GET_STATE' }
-  | { target: 'offscreen'; type: 'TTS_CLEAR_CACHE' };
+  | { target: 'offscreen'; type: 'TTS_CLEAR_CACHE' }
+  | { target: 'offscreen'; type: 'TTS_WARM' };
 
 /** offscreen -> background */
 export type OffscreenEvent =

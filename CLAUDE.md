@@ -85,9 +85,11 @@ cleaning (citations, URLs, emoji, dashes), unit tests (`bun test src/shared`).
 
 **Verified:** tsc clean, bun build, chunker/speech unit tests, content-script extraction + highlight mapping in headless Chrome
 on a sample article, popup rendering (screenshots with a chrome stub).
-**NOT verified (needs a real load-unpacked run):** actual audio playback end to end, WebGPU/WASM model load under the new
-lazy imports, offscreen recovery after Chrome's 30s close, mediaSession media keys in an offscreen doc, HF CORS with the narrowed
-host_permissions, context-menu flow, Alt+click.
+**Verified end to end** (`scripts/e2e.mjs`, Chromium + real Kokoro on WebGPU): model load under lazy imports, HF download with the
+narrowed host_permissions, playback, pause holds position, resume, next/prev, seek, speed, voice, on-page highlight, offscreen
+death + recovery (keeps voice/speed), stop clears highlight. Also verified on paulgraham.com/do.html (br-only markup).
+**NOT verified:** audible output quality (harness is headless), mediaSession media keys, context-menu flow, Alt+click,
+the popup talking to a live background (popup was only rendered against a stub).
 
 ## Open / next
 - Speed change regenerates (cached after first time). Could pre-generate neighbors.
