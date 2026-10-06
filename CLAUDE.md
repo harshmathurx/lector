@@ -1,8 +1,10 @@
-# Voicebox Reader — Full Project Context for Claude Code
+# Lector — Full Project Context for Claude Code
 
 ## Product Vision
 
 A Chrome extension that reads any web article aloud with natural AI voices. Built for regular people — not developers, not AI enthusiasts. The person who has 47 tabs of articles they want to read but can't focus long enough. The person with ADHD who absorbs better by listening. The person who wants to hear a Substack post while cooking.
+
+**Name: Lector** (locked 2026-10-06; repo dir is still `voicebox-extension`, Voicebox is credited as inspiration only).
 
 **Language support: English only (28 US/UK voices).** State this wherever the product is described. Multilingual is deferred (last on the roadmap).
 
@@ -13,14 +15,23 @@ A Chrome extension that reads any web article aloud with natural AI voices. Buil
 - Fast. Lightweight. Doesn't heat up the machine.
 - Feels like a product, not a demo.
 
-## Current Architecture (v0.2)
+## Design system (A×F, locked)
+
+Spec: `scratchpad/05-axf-build-spec.md` (git-ignored; copy the essentials here if the scratchpad is lost).
+- Monochrome, light + dark via `prefers-color-scheme`. The ONLY colour is error orange (#C2410C / #FB923C).
+- Two typefaces, bundled in `static/fonts/` (no runtime font requests): **Gloock** only for the wordmark, the article title and the sentence being read; **Instrument Sans** for everything else (timers use tabular-nums).
+- Icon: Gloock “ on a rounded tile. `static/icons/icon-light-*` (black tile, manifest default) and `icon-dark-*`; the popup swaps them with `chrome.action.setIcon` to match the system theme.
+- Motion carries meaning (no colour to do it): ink-in words in the popup sentence (driven by `PlayerState.segProgress`, interpolated with rAF), a growing underline on the page (`lector-read`) over a neutral sentence wash (`lector-seg`), the "speaking" quote icon, shimmer for preparing states. All off under reduced motion.
+- Copy: one plain status line; no jargon outside Settings; errors say what happened and what to do.
+
+## Current Architecture (v0.3)
 
 ```
 Popup (popup.html + popup.ts)         ONLY UI. Holds no playback state: polls background `VB_GET_STATE` every 300ms
 │                                      and renders PlayerState. Voice sheet (search/tabs/favorites), speed, seek bar,
 │                                      prev/next paragraph, settings (clear cache), first-run banner.
 Background SW (background.ts)         Lifecycle + routing only. Extracts article via content script, owns the offscreen
-│                                      doc (ping handshake, recreate once), relays highlight events to the tab, persists
+│                                      doc (ping handshake, recreate once), relays timed highlight events to the tab (VB_HIGHLIGHT with durationMs/offsetMs, VB_HIGHLIGHT_PAUSE), processes engine events strictly in order, persists
 │                                      the session in chrome.storage.session so it can RECOVER if Chrome kills the
 │                                      offscreen doc (it does after 30s without audio). Context menu, shortcuts, badge,
 │                                      5-min idle alarm closes the offscreen doc.
@@ -95,36 +106,19 @@ the popup talking to a live background (popup was only rendered against a stub).
 - No per-site extraction tuning (some SPAs/Substack variants may need fallbacks).
 - Chrome Web Store assets/listing, onboarding page.
 
-## Text Chunking (IMPLEMENTED)
+## Text Chunking
 
-The chunking algorithm in `offscreen.ts` handles Kokoro's 512-token limit:
-
-### Splitting Strategy (three levels, recursive)
-1. **Sentence boundaries** (`. ! ? …`) — primary split. 250ms silence after.
-2. **Clause boundaries** (`, ; : — –`) — when a sentence exceeds the limit. 150ms after.
-3. **Word boundaries** — last resort for very long clauses. 150ms after.
-
-### Rules Enforced
-- Never split mid-word, mid-quote, or inside parentheses
-- Punctuation stays with the preceding text (not stripped)
-- URLs and email addresses kept intact
-- Paragraph breaks: 400ms silence between separate paragraphs in the playback loop
-
-### Silence Between Chunks
-- Sentence boundary: 250ms (6000 samples at 24kHz)
-- Clause boundary: 150ms (3600 samples at 24kHz)
-- Paragraph boundary: 400ms (9600 samples at 24kHz)
-- Silence inserted as zero-filled Float32Array between concatenated audio chunks
+`src/shared/chunker.ts` is the source of truth (Intl.Segmenter sentences → clause → word splits, ≤300 chars, short first segment for fast start). Segments are offsets into the ORIGINAL paragraph text so the page can highlight them; `speech.ts` cleans text per segment AFTER chunking. Pauses are baked into each buffer as trailing silence (clause 100ms, sentence 180ms, paragraph 450ms, heading 700ms).
 
 ## Architecture Decisions Made (and why)
 
 1. **Offscreen document, not content script** — Chrome MV3 service workers can't use AudioContext. Content scripts can't run heavy ML without blocking the page. Offscreen documents get full DOM + Web Audio + no page interference.
 
-2. **Storage-based job queue** — `chrome.offscreen.createDocument()` returns before the document's JS has parsed. Sending a message immediately loses it. Instead, background stores the job in `chrome.storage.local`, offscreen polls on startup.
+2. **Ping handshake, not a job queue** — `chrome.offscreen.createDocument()` returns before the document's JS has parsed. The background pings (`TTS_PING`) until the offscreen listener answers, recreating the document once if it never does. (v0.1 used a storage-based job queue; replaced in v0.2.)
 
 3. **No floating player on the page** — was causing CSS conflicts, pointer-events bugs, and drag issues. All controls live in the extension popup. Simpler, more reliable.
 
-4. **Static MP3 voice previews** — instead of generating previews via TTS (which requires the 92MB model to be loaded), we pre-generated all 54 voice samples and bundle them. 1.3MB total. Instant.
+4. **Static MP3 voice previews** — pre-generated so previews never need the model loaded. 28 clips, one per supported voice. Instant.
 
 5. **Kokoro's speed parameter, not playbackRate** — `playbackRate` on AudioBufferSourceNode shifts pitch (Mickey Mouse effect). Kokoro's `speed` parameter adjusts tempo at the model level without pitch shift.
 
@@ -133,7 +127,7 @@ The chunking algorithm in `offscreen.ts` handles Kokoro's 512-token limit:
 ## File Structure
 
 ```
-voicebox-extension/
+voicebox-extension/   (product: Lector)
 ├── src/
 │   ├── popup/popup.ts          # Popup UI (polls background for state)
 │   ├── content/content.ts      # Extraction + highlight + Alt+click (injected on demand)
@@ -144,7 +138,9 @@ voicebox-extension/
 │   ├── manifest.json           # Chrome MV3 manifest
 │   ├── popup/popup.html        # Popup UI markup + styles
 │   ├── offscreen/offscreen.html # Offscreen entry point
-│   ├── icons/                  # Extension icons
+│   ├── icons/                  # icon-light-* / icon-dark-* (16/32/48/128)
+│   ├── fonts/                  # Gloock, Instrument Sans (OFL)
+│   ├── content/highlight.css   # ::highlight(lector-seg / lector-read)
 │   ├── previews/               # Voice preview MP3s (28 files)
 │   └── wasm/                   # ONNX Runtime WASM files
 ├── scripts/
