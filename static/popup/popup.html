@@ -7,166 +7,689 @@
   <style>
     * { margin: 0; padding: 0; box-sizing: border-box; }
 
+    :root {
+      --bg: #0a0a0a;
+      --surface: rgba(255, 255, 255, 0.04);
+      --surface-hover: rgba(255, 255, 255, 0.07);
+      --surface-active: rgba(255, 255, 255, 0.10);
+      --accent: #6366f1;
+      --accent-hover: #4f46e5;
+      --accent-soft: rgba(99, 102, 241, 0.12);
+      --accent-border: rgba(99, 102, 241, 0.45);
+      --text: #e0e0e0;
+      --text-secondary: #999;
+      --text-tertiary: #666;
+      --text-muted: #555;
+      --border: rgba(255, 255, 255, 0.08);
+      --border-strong: rgba(255, 255, 255, 0.14);
+      --danger: #ff6b6b;
+    }
+
+    html, body {
+      width: 380px;
+      background: var(--bg);
+      color: var(--text);
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
+      font-size: 14px;
+      line-height: 1.45;
+      -webkit-font-smoothing: antialiased;
+      -moz-osx-font-smoothing: grayscale;
+    }
+
     body {
-      width: 340px;
-      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
-      background: #0a0a0a;
-      color: #e0e0e0;
-      padding: 24px;
+      padding: 20px;
+      overflow-x: hidden;
+      user-select: none;
     }
 
-    .header {
-      display: flex;
-      align-items: center;
-      gap: 10px;
-      margin-bottom: 20px;
-    }
-
-    .logo {
-      width: 32px;
-      height: 32px;
-      border-radius: 8px;
-      background: linear-gradient(135deg, #6366f1, #8b5cf6);
-      display: flex;
-      align-items: center;
-      justify-content: center;
-      font-size: 16px;
-      font-weight: 700;
-      color: white;
-    }
-
-    .header h1 {
-      font-size: 18px;
-      font-weight: 700;
-      color: #fff;
-    }
-
-    .header p {
-      font-size: 12px;
-      color: #666;
-      margin-top: 2px;
-    }
-
-    .page-title {
-      font-size: 13px;
-      color: #999;
-      margin-bottom: 20px;
-      line-height: 1.5;
-      padding: 12px;
-      background: rgba(255,255,255,0.03);
-      border-radius: 8px;
-      border-left: 3px solid #6366f1;
-    }
-
-    .btn-read {
-      width: 100%;
-      padding: 14px;
-      border-radius: 12px;
-      background: #6366f1;
-      border: none;
-      color: white;
-      font-size: 15px;
-      font-weight: 600;
-      cursor: pointer;
-      transition: all 0.2s ease;
-      margin-bottom: 12px;
-    }
-
-    .btn-read:hover { background: #4f46e5; transform: translateY(-1px); }
-    .btn-read:active { transform: translateY(0); }
-    .btn-read:disabled { background: #2a2a2a; color: #555; cursor: not-allowed; transform: none; }
-
-    .shortcut-hint {
-      text-align: center;
-      font-size: 11px;
-      color: #555;
-      margin-top: 16px;
-    }
-
-    .shortcut-hint kbd {
-      background: #1a1a1a;
-      border: 1px solid #2a2a2a;
-      border-radius: 4px;
-      padding: 2px 6px;
-      font-size: 10px;
+    button {
       font-family: inherit;
-      color: #888;
+      border: none;
+      background: none;
+      color: inherit;
+      cursor: pointer;
     }
 
-    .error-message {
-      background: #1a0a0a;
-      border: 1px solid #3a1515;
-      border-radius: 8px;
-      padding: 10px 14px;
-      font-size: 12px;
-      color: #ff6b6b;
-      margin-top: 12px;
-      line-height: 1.4;
+    button:focus-visible {
+      outline: 2px solid var(--accent);
+      outline-offset: 2px;
     }
 
     .hidden { display: none !important; }
 
-    /* Player state */
-    .playing-info {
-      text-align: center;
-      padding: 20px 0;
+    /* ─── Header ─────────────────────────────────────────── */
+    .header {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      margin-bottom: 20px;
     }
 
-    .playing-info .status {
-      font-size: 14px;
-      color: #6366f1;
+    .logo {
+      width: 36px;
+      height: 36px;
+      border-radius: 9px;
+      background: linear-gradient(135deg, #6366f1 0%, #8b5cf6 100%);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      flex-shrink: 0;
+      color: white;
+      font-size: 16px;
+      font-weight: 700;
+      letter-spacing: -0.02em;
+    }
+
+    .header-text h1 {
+      font-size: 16px;
       font-weight: 600;
-      margin-bottom: 8px;
+      color: #fff;
+      letter-spacing: -0.01em;
+      line-height: 1.2;
     }
 
-    .playing-info .detail {
+    .header-text p {
       font-size: 12px;
-      color: #666;
+      color: var(--text-tertiary);
+      margin-top: 1px;
+      font-weight: 400;
     }
 
-    .btn-stop {
-      width: 100%;
-      padding: 10px;
-      border-radius: 8px;
-      background: rgba(255,255,255,0.05);
-      border: 1px solid rgba(255,255,255,0.08);
-      color: #999;
+    /* ─── Page title card ────────────────────────────────── */
+    .page-card {
+      padding: 11px 13px;
+      background: var(--surface);
+      border-radius: 10px;
+      border-left: 2px solid var(--accent);
+      margin-bottom: 16px;
+    }
+
+    .page-card .label {
+      font-size: 10px;
+      font-weight: 600;
+      text-transform: uppercase;
+      letter-spacing: 0.08em;
+      color: var(--text-tertiary);
+      margin-bottom: 3px;
+    }
+
+    .page-card .title {
       font-size: 13px;
-      cursor: pointer;
-      transition: all 0.15s ease;
-      margin-top: 8px;
+      color: var(--text);
+      line-height: 1.4;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      display: -webkit-box;
+      -webkit-line-clamp: 2;
+      -webkit-box-orient: vertical;
+      word-break: break-word;
     }
 
-    .btn-stop:hover { background: rgba(255,255,255,0.1); color: #ccc; }
+    /* ─── Primary CTA ────────────────────────────────────── */
+    .btn-primary {
+      width: 100%;
+      padding: 13px 16px;
+      border-radius: 8px;
+      background: var(--accent);
+      color: white;
+      font-size: 14px;
+      font-weight: 600;
+      letter-spacing: -0.005em;
+      transition: background 0.15s ease, transform 0.15s ease, opacity 0.15s ease;
+      box-shadow: 0 2px 12px rgba(99, 102, 241, 0.25);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 8px;
+    }
+
+    .btn-primary:hover:not(:disabled) {
+      background: var(--accent-hover);
+      box-shadow: 0 4px 16px rgba(99, 102, 241, 0.35);
+    }
+
+    .btn-primary:active:not(:disabled) { transform: scale(0.985); }
+
+    .btn-primary:disabled {
+      opacity: 0.45;
+      cursor: not-allowed;
+      box-shadow: none;
+    }
+
+    .btn-primary svg { flex-shrink: 0; }
+
+    /* ─── Section labels ─────────────────────────────────── */
+    .section {
+      margin-top: 18px;
+    }
+
+    .section-label {
+      font-size: 10px;
+      font-weight: 600;
+      text-transform: uppercase;
+      letter-spacing: 0.08em;
+      color: var(--text-tertiary);
+      margin-bottom: 8px;
+      padding: 0 2px;
+    }
+
+    /* ─── Voice chips (main + playing views) ─────────────── */
+    .voice-rail {
+      display: flex;
+      gap: 6px;
+      overflow-x: auto;
+      overflow-y: hidden;
+      padding: 2px;
+      margin: 0 -2px;
+      scrollbar-width: none;
+      -webkit-overflow-scrolling: touch;
+    }
+
+    .voice-rail::-webkit-scrollbar { display: none; }
+
+    .voice-chip {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      padding: 6px 11px;
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 20px;
+      font-size: 12px;
+      font-weight: 500;
+      color: var(--text-secondary);
+      white-space: nowrap;
+      flex-shrink: 0;
+      transition: background 0.15s ease, color 0.15s ease,
+                  border-color 0.15s ease;
+    }
+
+    .voice-chip:hover {
+      background: var(--surface-hover);
+      color: var(--text);
+      border-color: var(--border-strong);
+    }
+
+    .voice-chip.selected {
+      background: var(--accent-soft);
+      border-color: var(--accent-border);
+      color: #c7c9fc;
+    }
+
+    .voice-chip .tag {
+      font-size: 10px;
+      color: var(--text-tertiary);
+      font-weight: 400;
+    }
+
+    .voice-chip.selected .tag { color: #8b8ef5; }
+
+    /* Preview button — tiny play icon inside the chip */
+    .voice-preview-btn {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      width: 16px;
+      height: 16px;
+      border-radius: 50%;
+      background: rgba(255, 255, 255, 0.06);
+      color: var(--text-secondary);
+      flex-shrink: 0;
+      padding: 0;
+      transition: background 0.15s ease, color 0.15s ease;
+    }
+
+    .voice-preview-btn:hover {
+      background: rgba(255, 255, 255, 0.12);
+      color: var(--text);
+    }
+
+    .voice-chip.selected .voice-preview-btn {
+      background: rgba(99, 102, 241, 0.2);
+      color: #c7c9fc;
+    }
+
+    .voice-chip.selected .voice-preview-btn:hover {
+      background: rgba(99, 102, 241, 0.32);
+      color: #fff;
+    }
+
+    .voice-preview-btn svg {
+      width: 8px;
+      height: 8px;
+      margin-left: 1px;
+    }
+
+    /* Playing state — pulsing dot replaces the play glyph */
+    .voice-chip.previewing .voice-preview-btn {
+      background: var(--accent);
+      color: white;
+    }
+
+    .voice-chip.previewing .voice-preview-btn svg { display: none; }
+
+    .voice-chip.previewing .voice-preview-btn::before {
+      content: '';
+      width: 6px;
+      height: 6px;
+      border-radius: 50%;
+      background: white;
+      animation: pulse-dot 1s ease-in-out infinite;
+    }
+
+    @keyframes pulse-dot {
+      0%, 100% { transform: scale(0.7); opacity: 0.6; }
+      50%      { transform: scale(1);   opacity: 1;   }
+    }
+
+    /* ─── Voice grid (welcome view) ──────────────────────── */
+    .voice-grid {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 6px;
+      max-height: 218px;
+      overflow-y: auto;
+      padding: 2px;
+      margin: 0 -2px;
+      scrollbar-width: thin;
+      scrollbar-color: rgba(255,255,255,0.1) transparent;
+    }
+
+    .voice-grid::-webkit-scrollbar { width: 4px; }
+    .voice-grid::-webkit-scrollbar-track { background: transparent; }
+    .voice-grid::-webkit-scrollbar-thumb {
+      background: rgba(255,255,255,0.08);
+      border-radius: 2px;
+    }
+
+    .voice-card {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 8px;
+      padding: 10px 11px;
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      text-align: left;
+      transition: background 0.15s ease, border-color 0.15s ease;
+      min-width: 0;
+    }
+
+    .voice-card:hover {
+      background: var(--surface-hover);
+      border-color: var(--border-strong);
+    }
+
+    .voice-card.selected {
+      background: var(--accent-soft);
+      border-color: var(--accent-border);
+    }
+
+    .voice-card .voice-name {
+      font-size: 13px;
+      font-weight: 500;
+      color: var(--text);
+      line-height: 1.25;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+
+    .voice-card .voice-tag {
+      font-size: 10px;
+      color: var(--text-tertiary);
+      margin-top: 1px;
+    }
+
+    .voice-card.selected .voice-name { color: #c7c9fc; }
+    .voice-card.selected .voice-tag  { color: #8b8ef5; }
+
+    .voice-card .voice-preview-btn {
+      width: 22px;
+      height: 22px;
+    }
+
+    .voice-card .voice-preview-btn svg {
+      width: 9px;
+      height: 9px;
+    }
+
+    /* ─── Speed selector ─────────────────────────────────── */
+    .speed-row {
+      display: flex;
+      gap: 4px;
+      background: var(--surface);
+      padding: 3px;
+      border-radius: 8px;
+      border: 1px solid var(--border);
+    }
+
+    .speed-option {
+      flex: 1;
+      padding: 6px 0;
+      border-radius: 6px;
+      font-size: 12px;
+      font-weight: 500;
+      color: var(--text-tertiary);
+      text-align: center;
+      transition: background 0.15s ease, color 0.15s ease;
+    }
+
+    .speed-option:hover {
+      color: var(--text);
+      background: rgba(255, 255, 255, 0.04);
+    }
+
+    .speed-option.selected {
+      background: var(--accent-soft);
+      color: #c7c9fc;
+    }
+
+    /* ─── Playing view ───────────────────────────────────── */
+    .playing-status-row {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      margin-bottom: 6px;
+    }
+
+    .status-dot {
+      width: 7px;
+      height: 7px;
+      border-radius: 50%;
+      background: var(--accent);
+      flex-shrink: 0;
+      animation: pulse-dot 1.6s ease-in-out infinite;
+    }
+
+    .status-dot.paused {
+      background: #fbbf24;
+      animation: none;
+    }
+
+    .status-dot.loading {
+      background: #60a5fa;
+      animation: pulse-dot 1.2s ease-in-out infinite;
+    }
+
+    .playing-status-text {
+      font-size: 13px;
+      font-weight: 600;
+      color: var(--text);
+      letter-spacing: -0.005em;
+    }
+
+    .playing-detail {
+      font-size: 11px;
+      color: var(--text-tertiary);
+      margin-bottom: 14px;
+      padding-left: 15px;
+    }
+
+    .progress-track {
+      height: 4px;
+      background: rgba(255, 255, 255, 0.06);
+      border-radius: 2px;
+      overflow: hidden;
+      margin-bottom: 16px;
+    }
+
+    .progress-fill {
+      height: 100%;
+      background: var(--accent);
+      border-radius: 2px;
+      width: 0%;
+      transition: width 0.3s ease;
+    }
+
+    .playback-controls {
+      display: flex;
+      gap: 8px;
+      margin-bottom: 4px;
+    }
+
+    .btn-control {
+      flex: 1;
+      padding: 10px 14px;
+      border-radius: 8px;
+      font-size: 13px;
+      font-weight: 600;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 7px;
+      transition: background 0.15s ease, color 0.15s ease,
+                  border-color 0.15s ease;
+    }
+
+    .btn-control.primary {
+      background: var(--accent);
+      color: white;
+    }
+
+    .btn-control.primary:hover { background: var(--accent-hover); }
+
+    .btn-control.secondary {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      color: var(--text-secondary);
+    }
+
+    .btn-control.secondary:hover {
+      background: var(--surface-hover);
+      color: var(--text);
+      border-color: var(--border-strong);
+    }
+
+    .btn-control svg { flex-shrink: 0; }
+
+    /* ─── Welcome view ───────────────────────────────────── */
+    .welcome-hero {
+      text-align: center;
+      padding: 6px 8px 20px;
+    }
+
+    .welcome-hero h2 {
+      font-size: 20px;
+      font-weight: 700;
+      color: #fff;
+      letter-spacing: -0.02em;
+      margin-bottom: 6px;
+    }
+
+    .welcome-hero p {
+      font-size: 13px;
+      color: var(--text-tertiary);
+      line-height: 1.5;
+    }
+
+    .welcome-footer {
+      margin-top: 16px;
+    }
+
+    .skip-link {
+      display: block;
+      width: 100%;
+      text-align: center;
+      font-size: 11px;
+      color: var(--text-muted);
+      padding: 8px;
+      margin-top: 8px;
+      transition: color 0.15s ease;
+    }
+
+    .skip-link:hover { color: var(--text-secondary); }
+
+    /* ─── Shortcut hint ──────────────────────────────────── */
+    .shortcut-hint {
+      text-align: center;
+      font-size: 11px;
+      color: var(--text-muted);
+      margin-top: 18px;
+      padding-top: 14px;
+      border-top: 1px solid rgba(255, 255, 255, 0.04);
+    }
+
+    .shortcut-hint kbd {
+      display: inline-block;
+      background: #161616;
+      border: 1px solid #2a2a2a;
+      border-bottom-width: 2px;
+      border-radius: 4px;
+      padding: 1px 5px;
+      font-size: 10px;
+      font-family: inherit;
+      font-weight: 500;
+      color: #aaa;
+      margin: 0 1px;
+    }
+
+    /* ─── Error ──────────────────────────────────────────── */
+    .error-banner {
+      background: rgba(255, 107, 107, 0.08);
+      border: 1px solid rgba(255, 107, 107, 0.2);
+      border-radius: 8px;
+      padding: 9px 12px;
+      font-size: 12px;
+      color: var(--danger);
+      margin-top: 12px;
+      line-height: 1.4;
+    }
   </style>
 </head>
 <body>
-  <div class="header">
-    <div class="logo">V</div>
-    <div>
-      <h1>Voicebox</h1>
-      <p>AI article reader</p>
+
+  <!-- ═══ View: Welcome (first-run) ═══ -->
+  <div id="welcome-view" class="hidden">
+    <div class="header">
+      <div class="logo">V</div>
+      <div class="header-text">
+        <h1>Voicebox</h1>
+        <p>AI article reader</p>
+      </div>
+    </div>
+
+    <div class="welcome-hero">
+      <h2>Welcome to Voicebox</h2>
+      <p>Pick a voice to get started</p>
+    </div>
+
+    <div class="section" style="margin-top: 0;">
+      <div class="section-label">Voice</div>
+      <div class="voice-grid" id="welcome-voice-grid"></div>
+    </div>
+
+    <div class="section">
+      <div class="section-label">Speed</div>
+      <div class="speed-row" id="welcome-speed-row"></div>
+    </div>
+
+    <div class="welcome-footer">
+      <button class="btn-primary" id="btn-welcome-start">
+        <svg width="12" height="12" viewBox="0 0 24 24" fill="currentColor">
+          <path d="M8 5v14l11-7z"/>
+        </svg>
+        Start Reading
+      </button>
+      <button class="skip-link" id="btn-welcome-skip">Skip for now</button>
     </div>
   </div>
 
-  <div id="idle-view">
-    <div class="page-title" id="page-title">Loading page info...</div>
-    <button class="btn-read" id="btn-start">Read Aloud</button>
+  <!-- ═══ View: Main (idle) ═══ -->
+  <div id="idle-view" class="hidden">
+    <div class="header">
+      <div class="logo">V</div>
+      <div class="header-text">
+        <h1>Voicebox</h1>
+        <p>AI article reader</p>
+      </div>
+    </div>
+
+    <div class="page-card">
+      <div class="label">Current page</div>
+      <div class="title" id="page-title">Loading…</div>
+    </div>
+
+    <button class="btn-primary" id="btn-start">
+      <svg width="12" height="12" viewBox="0 0 24 24" fill="currentColor">
+        <path d="M8 5v14l11-7z"/>
+      </svg>
+      Read Aloud
+    </button>
+
+    <div class="section">
+      <div class="section-label">Voice</div>
+      <div class="voice-rail" id="idle-voice-rail"></div>
+    </div>
+
+    <div class="section">
+      <div class="section-label">Speed</div>
+      <div class="speed-row" id="idle-speed-row"></div>
+    </div>
+
     <div class="shortcut-hint">
-      <kbd>Alt+Shift+R</kbd> to read from anywhere
+      <kbd>Alt</kbd><kbd>Shift</kbd><kbd>R</kbd> to read from anywhere
     </div>
   </div>
 
+  <!-- ═══ View: Playing ═══ -->
   <div id="playing-view" class="hidden">
-    <div class="playing-info">
-      <div class="status" id="status-text">Playing</div>
-      <div class="detail" id="detail-text"></div>
+    <div class="header">
+      <div class="logo">V</div>
+      <div class="header-text">
+        <h1>Voicebox</h1>
+        <p>AI article reader</p>
+      </div>
     </div>
-    <button class="btn-stop" id="btn-stop">Stop Reading</button>
+
+    <div class="page-card">
+      <div class="label">Now reading</div>
+      <div class="title" id="playing-title">—</div>
+    </div>
+
+    <div class="playing-status-row">
+      <div class="status-dot" id="status-dot"></div>
+      <div class="playing-status-text" id="status-text">Playing</div>
+    </div>
+    <div class="playing-detail" id="status-detail"></div>
+
+    <div class="progress-track">
+      <div class="progress-fill" id="progress-fill"></div>
+    </div>
+
+    <div class="playback-controls">
+      <button class="btn-control secondary" id="btn-stop">
+        <svg width="10" height="10" viewBox="0 0 24 24" fill="currentColor">
+          <rect x="6" y="6" width="12" height="12" rx="1.5"/>
+        </svg>
+        Stop
+      </button>
+      <button class="btn-control primary" id="btn-toggle-play">
+        <svg id="icon-pause" width="10" height="10" viewBox="0 0 24 24" fill="currentColor">
+          <rect x="6" y="5" width="4" height="14" rx="1"/>
+          <rect x="14" y="5" width="4" height="14" rx="1"/>
+        </svg>
+        <svg id="icon-play" width="10" height="10" viewBox="0 0 24 24" fill="currentColor" class="hidden">
+          <path d="M8 5v14l11-7z"/>
+        </svg>
+        <span id="toggle-play-label">Pause</span>
+      </button>
+    </div>
+
+    <div class="section">
+      <div class="section-label">Voice</div>
+      <div class="voice-rail" id="playing-voice-rail"></div>
+    </div>
+
+    <div class="section">
+      <div class="section-label">Speed</div>
+      <div class="speed-row" id="playing-speed-row"></div>
+    </div>
   </div>
 
   <div id="error-container" class="hidden">
-    <div class="error-message" id="error-message"></div>
+    <div class="error-banner" id="error-message"></div>
   </div>
 
   <script type="module" src="popup.js"></script>
