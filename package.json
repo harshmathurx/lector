@@ -1,0 +1,20 @@
+{
+  "name": "voicebox-extension",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build": "bun build ./src/popup/popup.ts --outdir dist/popup --target browser && bun build ./src/content/content.ts --outdir dist/content --target browser && bun build ./src/background/background.ts --outdir dist/background --target browser && bun build ./src/offscreen/offscreen.ts --outdir dist/offscreen --target browser && cp -r static/* dist/",
+    "dev": "bun run build",
+    "watch": "bun build ./src/popup/popup.ts --outdir dist/popup --target browser --watch & bun build ./src/content/content.ts --outdir dist/content --target browser --watch & bun build ./src/background/background.ts --outdir dist/background --target browser --watch & bun build ./src/offscreen/offscreen.ts --outdir dist/offscreen --target browser --watch"
+  },
+  "dependencies": {
+    "kokoro-js": "^1.2.1",
+    "@mozilla/readability": "^0.6.0",
+    "turndown": "^7.2.0"
+  },
+  "devDependencies": {
+    "@types/chrome": "^0.1.14",
+    "typescript": "^5.6.0"
+  }
+}

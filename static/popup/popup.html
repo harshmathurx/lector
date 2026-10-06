@@ -1,0 +1,174 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Voicebox Reader</title>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+
+    body {
+      width: 340px;
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+      background: #0a0a0a;
+      color: #e0e0e0;
+      padding: 24px;
+    }
+
+    .header {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      margin-bottom: 20px;
+    }
+
+    .logo {
+      width: 32px;
+      height: 32px;
+      border-radius: 8px;
+      background: linear-gradient(135deg, #6366f1, #8b5cf6);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 16px;
+      font-weight: 700;
+      color: white;
+    }
+
+    .header h1 {
+      font-size: 18px;
+      font-weight: 700;
+      color: #fff;
+    }
+
+    .header p {
+      font-size: 12px;
+      color: #666;
+      margin-top: 2px;
+    }
+
+    .page-title {
+      font-size: 13px;
+      color: #999;
+      margin-bottom: 20px;
+      line-height: 1.5;
+      padding: 12px;
+      background: rgba(255,255,255,0.03);
+      border-radius: 8px;
+      border-left: 3px solid #6366f1;
+    }
+
+    .btn-read {
+      width: 100%;
+      padding: 14px;
+      border-radius: 12px;
+      background: #6366f1;
+      border: none;
+      color: white;
+      font-size: 15px;
+      font-weight: 600;
+      cursor: pointer;
+      transition: all 0.2s ease;
+      margin-bottom: 12px;
+    }
+
+    .btn-read:hover { background: #4f46e5; transform: translateY(-1px); }
+    .btn-read:active { transform: translateY(0); }
+    .btn-read:disabled { background: #2a2a2a; color: #555; cursor: not-allowed; transform: none; }
+
+    .shortcut-hint {
+      text-align: center;
+      font-size: 11px;
+      color: #555;
+      margin-top: 16px;
+    }
+
+    .shortcut-hint kbd {
+      background: #1a1a1a;
+      border: 1px solid #2a2a2a;
+      border-radius: 4px;
+      padding: 2px 6px;
+      font-size: 10px;
+      font-family: inherit;
+      color: #888;
+    }
+
+    .error-message {
+      background: #1a0a0a;
+      border: 1px solid #3a1515;
+      border-radius: 8px;
+      padding: 10px 14px;
+      font-size: 12px;
+      color: #ff6b6b;
+      margin-top: 12px;
+      line-height: 1.4;
+    }
+
+    .hidden { display: none !important; }
+
+    /* Player state */
+    .playing-info {
+      text-align: center;
+      padding: 20px 0;
+    }
+
+    .playing-info .status {
+      font-size: 14px;
+      color: #6366f1;
+      font-weight: 600;
+      margin-bottom: 8px;
+    }
+
+    .playing-info .detail {
+      font-size: 12px;
+      color: #666;
+    }
+
+    .btn-stop {
+      width: 100%;
+      padding: 10px;
+      border-radius: 8px;
+      background: rgba(255,255,255,0.05);
+      border: 1px solid rgba(255,255,255,0.08);
+      color: #999;
+      font-size: 13px;
+      cursor: pointer;
+      transition: all 0.15s ease;
+      margin-top: 8px;
+    }
+
+    .btn-stop:hover { background: rgba(255,255,255,0.1); color: #ccc; }
+  </style>
+</head>
+<body>
+  <div class="header">
+    <div class="logo">V</div>
+    <div>
+      <h1>Voicebox</h1>
+      <p>AI article reader</p>
+    </div>
+  </div>
+
+  <div id="idle-view">
+    <div class="page-title" id="page-title">Loading page info...</div>
+    <button class="btn-read" id="btn-start">Read Aloud</button>
+    <div class="shortcut-hint">
+      <kbd>Alt+Shift+R</kbd> to read from anywhere
+    </div>
+  </div>
+
+  <div id="playing-view" class="hidden">
+    <div class="playing-info">
+      <div class="status" id="status-text">Playing</div>
+      <div class="detail" id="detail-text"></div>
+    </div>
+    <button class="btn-stop" id="btn-stop">Stop Reading</button>
+  </div>
+
+  <div id="error-container" class="hidden">
+    <div class="error-message" id="error-message"></div>
+  </div>
+
+  <script type="module" src="popup.js"></script>
+</body>
+</html>
