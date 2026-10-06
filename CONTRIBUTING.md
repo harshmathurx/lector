@@ -1,6 +1,6 @@
 # Contributing
 
-Thanks for helping make Voicebox better.
+Thanks for helping make Lector better.
 
 ## Setup
 
@@ -27,7 +27,7 @@ bun test
 
 ## Reporting bugs
 
-Please include the page URL (or a minimal HTML example), your Chrome version, whether you are on WebGPU or CPU (Settings in the popup shows this), and any errors from `chrome://extensions` → Voicebox → *service worker* / *offscreen.html* consoles.
+Please include the page URL (or a minimal HTML example), your Chrome version, whether you are on WebGPU or CPU (Settings in the popup shows this), and any errors from `chrome://extensions` → Lector → *service worker* / *offscreen.html* consoles.
 
 ## Architecture
 

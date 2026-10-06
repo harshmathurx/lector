@@ -1,8 +1,12 @@
-# Voicebox Reader
+# Lector
 
-**Listen to any web page with natural AI voices, entirely on your device.**
+**A voice you'd want to listen to.**
 
-Install, click, listen. **English only for now** (American and British voices). No account, no server, and nothing you read ever leaves your browser. Voicebox runs the [Kokoro 82M](https://huggingface.co/hexgrad/Kokoro-82M) speech model locally with WebGPU (or WASM on machines without a GPU).
+Listen to any web page with natural AI voices, entirely on your device.
+
+Install, click, listen. **English only for now** (American and British voices). No account, no server, and nothing you read ever leaves your browser. Lector runs the [Kokoro 82M](https://huggingface.co/hexgrad/Kokoro-82M) speech model locally with WebGPU (or WASM on machines without a GPU).
+
+Inspiration: [Voicebox](https://github.com/jamiepine/voicebox) by Jamie Pine. Lector can later connect to a local Voicebox as an alternative voice engine.
 
 ## Features
 
@@ -26,7 +30,7 @@ bun run build
 
 Then in Chrome: `chrome://extensions` → enable **Developer mode** → **Load unpacked** → choose the `dist/` folder.
 
-The first time you listen, the voice model downloads once (roughly 90 MB on CPU, larger on GPU) and is cached by the browser. After that, Voicebox works offline.
+The first time you listen, the voice model downloads once (roughly 90 MB on CPU, larger on GPU) and is cached by the browser. After that, Lector works offline.
 
 ## Using it
 
@@ -42,7 +46,7 @@ The first time you listen, the voice model downloads once (roughly 90 MB on CPU,
 
 Shortcuts can be changed at `chrome://extensions/shortcuts`.
 
-**Language support:** English only. Voicebox reads English pages with 28 American and British voices. Other languages are not supported yet and will not read well.
+**Language support:** English only. Lector reads English pages with 28 American and British voices. Other languages are not supported yet and will not read well.
 
 ## How it works
 
@@ -69,4 +73,4 @@ bun test              # unit tests (chunker, speech cleanup)
 
 ## Credits and licenses
 
-Voicebox Reader is MIT licensed ([LICENSE](LICENSE)). It builds on [Kokoro](https://huggingface.co/hexgrad/Kokoro-82M) (Apache-2.0), [kokoro-js](https://github.com/hexgrad/kokoro) and [Transformers.js](https://github.com/huggingface/transformers.js) (Apache-2.0), [ONNX Runtime Web](https://github.com/microsoft/onnxruntime) (MIT) and [Mozilla Readability](https://github.com/mozilla/readability) (Apache-2.0). See [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).
+Lector is MIT licensed ([LICENSE](LICENSE)). It builds on [Kokoro](https://huggingface.co/hexgrad/Kokoro-82M) (Apache-2.0), [kokoro-js](https://github.com/hexgrad/kokoro) and [Transformers.js](https://github.com/huggingface/transformers.js) (Apache-2.0), [ONNX Runtime Web](https://github.com/microsoft/onnxruntime) (MIT) and [Mozilla Readability](https://github.com/mozilla/readability) (Apache-2.0). Type is set in [Gloock](https://fonts.google.com/specimen/Gloock) and [Instrument Sans](https://fonts.google.com/specimen/Instrument+Sans) (SIL OFL 1.1, bundled in `static/fonts/`). See [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).

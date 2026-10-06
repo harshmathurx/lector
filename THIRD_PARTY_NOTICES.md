@@ -1,6 +1,6 @@
 # Third-party notices
 
-Voicebox Reader bundles or downloads the following. Each is used under its own license.
+Lector bundles or downloads the following. Each is used under its own license.
 
 | Component | License | Use |
 |-----------|---------|-----|
@@ -9,5 +9,7 @@ Voicebox Reader bundles or downloads the following. Each is used under its own l
 | [Transformers.js](https://github.com/huggingface/transformers.js) | Apache-2.0 | Model loading (via kokoro-js). Bundled. |
 | [ONNX Runtime Web](https://github.com/microsoft/onnxruntime) | MIT | Inference engine. Bundled, including the WASM binaries in `static/wasm/`. |
 | [Mozilla Readability](https://github.com/mozilla/readability) | Apache-2.0 | Article extraction. Bundled. |
+| [Gloock](https://fonts.google.com/specimen/Gloock) | SIL OFL 1.1 | Display typeface. Bundled in `static/fonts/`. |
+| [Instrument Sans](https://fonts.google.com/specimen/Instrument+Sans) | SIL OFL 1.1 | Interface typeface. Bundled in `static/fonts/`. |
 
 The 54 voice preview clips in `static/previews/` were generated with Kokoro.

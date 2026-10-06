@@ -1,8 +1,8 @@
 {
   "manifest_version": 3,
-  "name": "Voicebox Reader",
-  "version": "0.2.0",
-  "description": "Read any English article aloud with natural AI voices. Powered by Kokoro TTS running locally in your browser.",
+  "name": "Lector",
+  "version": "0.3.0",
+  "description": "Listen to any English web page with natural voices that run on your own computer. No account, nothing leaves your browser.",
   "permissions": [
     "activeTab",
     "scripting",
@@ -19,11 +19,12 @@
   "action": {
     "default_popup": "popup/popup.html",
     "default_icon": {
-      "16": "icons/icon16.png",
-      "48": "icons/icon48.png",
-      "128": "icons/icon128.png"
+      "16": "icons/icon-light-16.png",
+      "32": "icons/icon-light-32.png",
+      "48": "icons/icon-light-48.png",
+      "128": "icons/icon-light-128.png"
     },
-    "default_title": "Voicebox Reader"
+    "default_title": "Lector"
   },
   "background": {
     "service_worker": "background/background.js",
@@ -56,8 +57,9 @@
     "extension_pages": "script-src 'self' 'wasm-unsafe-eval'; object-src 'self'"
   },
   "icons": {
-    "16": "icons/icon16.png",
-    "48": "icons/icon48.png",
-    "128": "icons/icon128.png"
+    "16": "icons/icon-light-16.png",
+    "32": "icons/icon-light-32.png",
+    "48": "icons/icon-light-48.png",
+    "128": "icons/icon-light-128.png"
   }
 }
