@@ -79,26 +79,25 @@ the likely cause of old bug "offscreen sometimes doesn't load". Mitigated by ses
 
 Voice previews: 28 pre-generated MP3 files (~25KB each) in `static/previews/`. Generated via the Voicebox Python backend. Each says "Hi, I'm [name], and I'll be reading to you."
 
-## Status (v0.2)
+## Status (v0.3)
 
-**Fixed in the v0.2 rewrite:** voice/speed changes (payload shape mismatch popup↔offscreen), skip skipping two paragraphs,
-pause position wrong at speed≠1, cache key collisions + Array.from(Float32Array) cache, seek hack, double message delivery,
-offscreen eval failures being silent, no seek bar, no read-from-here, no progress/time-left, no paragraph navigation,
-no "what's being read", no settings, no onboarding, `<all_urls>` permission.
+Shipped in v0.3 (all committed): Lector rebrand + A×F popup (light/dark), word-by-word ink-in (popup) and growing page
+underline synced to speech, robust page highlighting across sites (fallback text search, stale-DOM recovery), Show on page /
+Scroll to follow toggles, low-end performance tiers (threaded WASM via COEP/COOP, q4/q8/fp32 per device, adaptive lookahead,
+keep-alive while loading), accessibility pass (0 axe violations), macOS/Windows Now Playing metadata + position, keyboard
+"listen from here", Voice quality setting.
 
-**Added:** sentence streaming with lookahead (first audio ≈ first sentence), on-page sentence highlight + auto-scroll,
-Alt+click / context-menu "Read aloud from here" / "Read selection", seek bar + time left, prev/next paragraph + shortcuts
-(Alt+Shift+←/→), voice picker with search/favorites, media keys (mediaSession), badge status, session recovery, speech text
-cleaning (citations, URLs, emoji, dashes), unit tests (`bun test src/shared`).
+Shortcuts (suggested; customisable at chrome://extensions/shortcuts): Alt+Shift+R start/pause, Alt+Shift+. next paragraph,
+Alt+Shift+, previous paragraph, Alt+Shift+H listen from here; stop / speed-up / speed-down exist unbound. (Moved off
+Alt+Shift+←/→ which is macOS word selection.)
 
-**Verified:** tsc clean, bun build, chunker/speech unit tests, content-script extraction + highlight mapping in headless Chrome
-on a sample article, popup rendering (screenshots with a chrome stub).
-**Verified end to end** (`scripts/e2e.mjs`, Chromium + real Kokoro on WebGPU): model load under lazy imports, HF download with the
-narrowed host_permissions, playback, pause holds position, resume, next/prev, seek, speed, voice, on-page highlight, offscreen
-death + recovery (keeps voice/speed), stop clears highlight, on both WebGPU and forced WASM (`NO_GPU=1`). Also verified live on
-paulgraham.com/do.html (br-only markup) and worldstories.org.uk Hansel and Gretel (title "Page | Site" handled).
-**NOT verified:** audible output quality (harness is headless), mediaSession media keys, context-menu flow, Alt+click,
-the popup talking to a live background (popup was only rendered against a stub).
+**Verified automatically:** tsc, `bun test` (22), `scripts/e2e.mjs` on WebGPU and NO_GPU with real Kokoro (playback, pause,
+resume, next/prev, seek, speed, voice, recovery, stop, Now Playing metadata/position, listen-from-here, quality switch),
+axe-core on all popup views, CDP keyboard walk, highlight hit-rates on saved real pages.
+**Needs the owner by hand:** audible quality (WASM q4, 16-bit cache replays, keep-alive silence), macOS Now Playing and
+Windows media flyout, VoiceOver/NVDA scripts in `scratchpad/06-a11y-audit.md`, Windows High Contrast, shortcut strings on Mac.
+**Harness gotcha:** Chrome caches the service-worker script per profile; always use a fresh profile (or clear
+`Service Worker/ScriptCache`) or a stale background silently runs.
 
 ## Open / next
 - Speed change regenerates (cached after first time). Could pre-generate neighbors.
@@ -132,8 +131,8 @@ voicebox-extension/   (product: Lector)
 │   ├── popup/popup.ts          # Popup UI (polls background for state)
 │   ├── content/content.ts      # Extraction + highlight + Alt+click (injected on demand)
 │   ├── background/background.ts # Lifecycle, routing, session recovery
-│   ├── offscreen/{offscreen,engine,engine.worker,cache}.ts # Player/session, engine client, Kokoro worker, IDB cache
-│   └── shared/                 # protocol, chunker, speech, voices (+ tests)
+│   ├── offscreen/{offscreen,engine,engine.worker,tier,cache}.ts # Player/session, engine client, Kokoro worker, device tiers, IDB cache
+│   └── shared/                 # protocol, chunker, speech, title, voices (+ tests)
 ├── static/
 │   ├── manifest.json           # Chrome MV3 manifest
 │   ├── popup/popup.html        # Popup UI markup + styles
@@ -145,6 +144,7 @@ voicebox-extension/   (product: Lector)
 │   └── wasm/                   # ONNX Runtime WASM files
 ├── scripts/
 │   ├── e2e.mjs                 # Real-browser end-to-end test (see header)
+│   ├── bench.mjs               # Performance bench: TTFA, RTF, stalls, memory
 │   └── generate-previews.py    # Generates voice preview MP3s
 ├── package.json
 ├── tsconfig.json
@@ -157,7 +157,7 @@ voicebox-extension/   (product: Lector)
 Typed in `src/shared/protocol.ts`. popup→background: `VB_START {mode}`, `VB_CMD {command}`, `VB_GET_STATE`, `VB_CLEAR_CACHE`;
 content→background: `VB_JUMP`. background→offscreen (tagged `target:'offscreen'`): `TTS_PING/START/COMMAND/GET_STATE/CLEAR_CACHE`.
 offscreen→background: `VB_EVENT {status|segment|finished}`. background→content: `VB_PING`, `EXTRACT_ARTICLE`, `VB_HIGHLIGHT`, `VB_HIGHLIGHT_CLEAR`.
-Commands: toggle/pause/resume/stop/next/prev/seek/jump/voice/speed.
+Commands: toggle/pause/resume/stop/next/prev/seek/jump/voice/speed. Additive since v0.3: `Article.image/site`, `TTS_START/TTS_WARM.quality`, `PlayerState.segProgress/threads/lang`, segment `durationMs/offsetMs`, `VB_HIGHLIGHT_PAUSE`, a `progress` event. `src/shared/protocol.ts` is the source of truth.
 
 ## Dependencies
 
