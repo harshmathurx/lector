@@ -61,8 +61,9 @@ function describeHardware(gpu: boolean): Hardware {
 
 /** The automatic tier, with the developer overrides from the benchmark harness applied. */
 function resolve(want: 'wasm' | undefined): Tier {
-  let t = want === 'wasm' ? chooseWasm(hardware) : chooseTier(hardware);
-  if (opts.device) t = opts.device === 'wasm' ? chooseWasm(hardware) : { ...t, device: 'webgpu', dtype: 'fp32' };
+  const quality = opts.quality ?? 'auto';
+  let t = want === 'wasm' ? chooseWasm(hardware, quality) : chooseTier(hardware, quality);
+  if (opts.device) t = opts.device === 'wasm' ? chooseWasm(hardware, quality) : { ...t, device: 'webgpu', dtype: 'fp32' };
   if (t.device === 'webgpu' && opts.dtypeGpu) t = { ...t, dtype: opts.dtypeGpu };
   if (t.device === 'wasm' && opts.dtypeWasm) t = { ...t, dtype: opts.dtypeWasm };
   if (t.device === 'wasm' && opts.threads) t = { ...t, threads: hardware.isolated ? opts.threads : 1 };

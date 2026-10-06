@@ -13,7 +13,10 @@
 
     * { margin: 0; padding: 0; box-sizing: border-box; }
 
-    /* ─── Tokens (A×F: monochrome, the only colour is --err) ─── */
+    /* ─── Tokens (A×F: monochrome, the only colour is --err) ───
+       --wait (unread words) and --edge (control borders) are held at 4.5:1 and 3:1
+       so low-vision readers can read ahead and find every control. --line is for
+       dividers only. */
     :root {
       color-scheme: light dark;
       --bg: #FFFFFF;
@@ -21,7 +24,8 @@
       --surface-2: #F7F7F7;
       --ink: #0A0A0A;
       --muted: #6E6E6E;
-      --wait: #B5B5B5;
+      --wait: #767676;
+      --edge: #8C8C8C;
       --line: #E7E7E7;
       --chip: #F2F2F2;
       --wash: rgba(10,10,10,.05);
@@ -39,7 +43,8 @@
         --surface-2: #111111;
         --ink: #F2F2F2;
         --muted: #8A8A8A;
-        --wait: #4E4E4E;
+        --wait: #7A7A7A;
+        --edge: #6B6B6B;
         --line: #262626;
         --chip: #1F1F1F;
         --wash: rgba(255,255,255,.06);
@@ -48,22 +53,27 @@
     }
 
     html, body { background: var(--bg); }
+    /* No overflow:hidden: at 200% zoom Chrome caps the popup's size and the page must scroll, not clip. */
     body {
-      width: 380px; min-height: 500px; position: relative; overflow: hidden;
-      font-family: var(--ui); font-size: 13px; color: var(--ink); -webkit-font-smoothing: antialiased;
+      width: 380px; min-height: 500px; position: relative;
+      font-family: var(--ui); font-size: .8125rem; color: var(--ink); -webkit-font-smoothing: antialiased;
     }
     button { font-family: inherit; color: inherit; cursor: pointer; border: none; background: none; }
-    button:focus-visible, input:focus-visible, .voice-row:focus-visible {
+    button:focus-visible, input:focus-visible {
       outline: 2px solid var(--ink); outline-offset: 2px;
     }
     svg { display: block; fill: currentColor; }
     .hidden { display: none !important; }
+    .sr-only {
+      position: absolute; width: 1px; height: 1px; margin: -1px; padding: 0; border: 0;
+      overflow: hidden; clip: rect(0 0 0 0); clip-path: inset(50%); white-space: nowrap;
+    }
 
     .main { padding: 18px 18px 18px; }
 
     /* ─── Header ─── */
     .header { display: flex; align-items: center; gap: 9px; margin-bottom: 18px; }
-    .wordmark { font: 400 19px/1 var(--display); letter-spacing: -.01em; }
+    .wordmark { font: 400 1.1875rem/1 var(--display); letter-spacing: -.01em; }
     .icon-btn {
       margin-left: auto; width: 32px; height: 32px; border-radius: 50%;
       display: flex; align-items: center; justify-content: center; color: var(--muted);
@@ -92,14 +102,14 @@
 
     /* ─── Idle ─── */
     .page-title {
-      font: 400 21px/1.28 var(--display); letter-spacing: -.005em;
+      font: 400 1.3125rem/1.28 var(--display); letter-spacing: -.005em;
       display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden;
     }
-    .page-hint { font-size: 12px; color: var(--muted); margin-top: 8px; }
+    .page-hint { font-size: .75rem; color: var(--muted); margin-top: 8px; }
 
     .btn-primary {
-      width: 100%; margin-top: 18px; height: 50px; border-radius: var(--r-pill);
-      background: var(--ink); color: var(--bg); font-size: 14.5px; font-weight: 600;
+      width: 100%; margin-top: 18px; min-height: 50px; border-radius: var(--r-pill);
+      background: var(--ink); color: var(--bg); font-size: .90625rem; font-weight: 600;
       display: flex; align-items: center; justify-content: center; gap: 9px;
       transition: opacity .15s, transform .1s;
     }
@@ -108,30 +118,30 @@
     .btn-primary:disabled { background: var(--chip); color: var(--muted); cursor: default; }
     .btn-primary svg { width: 15px; height: 15px; }
 
-    .label { font-size: 11.5px; font-weight: 500; color: var(--muted); margin: 20px 0 7px; }
+    .label { font-size: .71875rem; font-weight: 500; color: var(--muted); margin: 20px 0 7px; }
 
     /* ─── Voice card ─── */
     .voice-card {
       width: 100%; display: flex; align-items: center; gap: 12px; text-align: left;
-      background: var(--surface); border: 1px solid var(--line); border-radius: var(--r-card);
+      background: var(--surface); border: 1px solid var(--edge); border-radius: var(--r-card);
       padding: 10px 14px 10px 10px; transition: background .15s;
     }
     .voice-card:hover { background: var(--wash); }
     .avatar {
       width: 34px; height: 34px; border-radius: 50%; flex-shrink: 0;
       display: flex; align-items: center; justify-content: center;
-      font-size: 13px; font-weight: 600; color: var(--ink); background: var(--chip);
+      font-size: .8125rem; font-weight: 600; color: var(--ink); background: var(--chip);
     }
     .voice-card .info { min-width: 0; flex: 1; }
-    .voice-card .name { font-size: 13px; font-weight: 600; }
-    .voice-card .vibe { font-size: 11.5px; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-    .voice-card .chev { color: var(--muted); font-size: 12px; font-weight: 500; }
+    .voice-card .name { display: block; font-size: .8125rem; font-weight: 600; }
+    .voice-card .vibe { display: block; font-size: .71875rem; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .voice-card .chev { color: var(--muted); font-size: .75rem; font-weight: 500; }
 
     /* ─── Speed ─── */
     .speed-row { display: flex; gap: 5px; }
     .speed-option {
-      flex: 1; height: 32px; border-radius: var(--r-pill); text-align: center;
-      border: 1px solid var(--line); font-size: 12px; font-weight: 500; color: var(--muted);
+      flex: 1; min-height: 32px; border-radius: var(--r-pill); text-align: center;
+      border: 1px solid var(--edge); font-size: .75rem; font-weight: 500; color: var(--muted);
       font-variant-numeric: tabular-nums; transition: background .15s, color .15s, border-color .15s;
     }
     .speed-option:hover { background: var(--wash); color: var(--ink); }
@@ -139,36 +149,43 @@
 
     /* ─── Tips, banner, error ─── */
     .tips { margin-top: 20px; display: grid; gap: 7px; }
-    .tip { font-size: 11.5px; color: var(--muted); line-height: 1.45; display: flex; gap: 8px; align-items: baseline; }
+    .tip { font-size: .71875rem; color: var(--muted); line-height: 1.45; display: flex; gap: 8px; align-items: baseline; }
     .tip b { color: var(--ink); font-weight: 600; }
     kbd, .kbd {
       background: var(--chip); border: 1px solid var(--line); border-radius: 5px;
-      padding: 1px 5px; font: 500 10.5px var(--ui); color: var(--ink); white-space: nowrap;
+      padding: 1px 5px; font: 500 .65625rem var(--ui); color: var(--ink); white-space: nowrap;
     }
     .banner {
       margin-top: 16px; padding: 12px 14px; border-radius: 14px;
       background: var(--wash); border: 1px solid var(--line);
-      font-size: 12px; line-height: 1.5; color: var(--muted);
+      font-size: .75rem; line-height: 1.5; color: var(--muted);
     }
     .banner strong { color: var(--ink); font-weight: 600; }
     .error-msg {
       margin: -4px 0 16px; padding: 11px 14px; border-radius: 14px;
       border: 1px solid var(--err); background: color-mix(in srgb, var(--err) 8%, transparent);
-      color: var(--err); font-size: 12.5px; line-height: 1.45; font-weight: 500;
+      color: var(--err); font-size: .78125rem; line-height: 1.45; font-weight: 500;
     }
-    .error-msg button { margin-top: 6px; font-size: 12px; font-weight: 600; text-decoration: underline; text-underline-offset: 3px; color: var(--err); display: block; }
+    .error-msg button {
+      margin-top: 2px; min-height: 32px; padding: 0 8px 0 0; font-size: .75rem; font-weight: 600;
+      text-decoration: underline; text-underline-offset: 3px; color: var(--err); display: block;
+    }
 
     /* ─── Player ─── */
-    .status { font-size: 13px; font-weight: 600; line-height: 1.3; min-height: 17px; }
+    .status { font-size: .8125rem; font-weight: 600; line-height: 1.3; min-height: 17px; }
+    .status:focus { outline: none; } /* focus lands here only to be read aloud, never to be operated */
     .status .extra { font-weight: 400; color: var(--muted); }
-    .status-sub { font-size: 12px; color: var(--muted); margin-top: 3px; line-height: 1.4; }
+    .status-sub { font-size: .75rem; color: var(--muted); margin-top: 3px; line-height: 1.4; }
     .player-title {
-      margin-top: 8px; font: 400 14px/1.35 var(--display); color: var(--muted);
+      margin-top: 8px; font: 400 .875rem/1.35 var(--display); color: var(--muted);
       display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden;
     }
 
     /* Ink-in: unread words wait in grey, spoken words turn to ink */
-    .sentence-wrap { position: relative; height: 5.6em; font-size: 20px; margin: 14px 0 16px; overflow: hidden; }
+    .sentence-wrap {
+      position: relative; height: 5.6em; max-height: 45vh; font-size: 1.25rem; margin: 14px 0 16px;
+      overflow-y: auto; scrollbar-width: thin; scrollbar-color: var(--edge) transparent;
+    }
     .sentence { font: 400 1em/1.38 var(--display); transition: opacity .25s ease; }
     .sentence.fade { opacity: 0; transition-duration: .15s; }
     .sentence .w { color: var(--wait); transition: color .35s ease; }
@@ -190,7 +207,7 @@
 
     /* Progress: 3px bar, head dot with a slow halo while playing */
     .seek { margin-top: 2px; }
-    input[type=range] { -webkit-appearance: none; appearance: none; width: 100%; height: 18px; background: transparent; cursor: pointer; display: block; }
+    input[type=range] { -webkit-appearance: none; appearance: none; width: 100%; height: 24px; background: transparent; cursor: pointer; display: block; }
     input[type=range]::-webkit-slider-runnable-track {
       height: 3px; border-radius: 3px;
       background: linear-gradient(to right, var(--ink) var(--fill, 0%), var(--line) var(--fill, 0%));
@@ -206,7 +223,7 @@
       0% { box-shadow: 0 0 0 0 color-mix(in srgb, var(--ink) 35%, transparent); }
       100% { box-shadow: 0 0 0 9px transparent; }
     }
-    .times { display: flex; justify-content: space-between; font-size: 11.5px; color: var(--muted); font-variant-numeric: tabular-nums; margin-top: 3px; }
+    .times { display: flex; justify-content: space-between; font-size: .71875rem; color: var(--muted); font-variant-numeric: tabular-nums; margin-top: 1px; }
 
     .controls { display: grid; grid-template-columns: 1fr auto 1fr; align-items: center; margin: 12px 0 20px; }
     .ctl {
@@ -227,47 +244,59 @@
     .loadbar { height: 3px; border-radius: 3px; background: var(--line); overflow: hidden; margin: 18px 0 12px; }
     #load-block { margin-bottom: 26px; }
     .loadbar > div { height: 100%; background: var(--ink); transition: width .3s; width: 0; }
-    .linkish { font-size: 12px; font-weight: 500; color: var(--muted); text-decoration: underline; text-underline-offset: 3px; }
+    .linkish {
+      min-height: 32px; padding: 0 8px 0 0; font-size: .75rem; font-weight: 500; color: var(--muted);
+      text-decoration: underline; text-underline-offset: 3px;
+    }
     .linkish:hover { color: var(--ink); }
     .player-pickers { display: grid; gap: 10px; }
 
-    /* ─── Sheets (voice picker, settings) ─── */
+    /* ─── Sheets (voice picker, settings). Fixed to the viewport so they scroll inside it when it is small. ─── */
     .sheet {
-      position: absolute; inset: 0; background: var(--bg); z-index: 10;
+      position: fixed; inset: 0; background: var(--bg); z-index: 10;
       display: flex; flex-direction: column; animation: slide .18s ease;
     }
     @keyframes slide { from { transform: translateY(12px); opacity: 0; } }
     .sheet-head { display: flex; align-items: center; gap: 8px; padding: 16px 16px 8px 18px; }
-    .sheet-head h2 { font: 400 19px/1 var(--display); flex: 1; }
+    .sheet-head h2 { font: 400 1.1875rem/1 var(--display); flex: 1; }
+    .sheet-head h2:focus { outline: none; }
     .sheet-body { overflow-y: auto; padding: 4px 18px 18px; flex: 1; min-height: 0; }
     .search {
-      width: 100%; height: 38px; padding: 0 14px; border-radius: var(--r-pill); font: 400 13px var(--ui);
-      background: var(--surface); border: 1px solid var(--line); color: var(--ink);
+      width: 100%; min-height: 38px; padding: 0 14px; border-radius: var(--r-pill); font: 400 .8125rem var(--ui);
+      background: var(--surface); border: 1px solid var(--edge); color: var(--ink);
     }
     .search::placeholder { color: var(--muted); }
     .tabs { display: flex; gap: 5px; margin: 12px 0 8px; flex-wrap: wrap; }
     .tab {
-      white-space: nowrap; padding: 5px 12px; border-radius: var(--r-pill); font-size: 12px; font-weight: 500;
-      border: 1px solid var(--line); color: var(--muted); transition: background .15s, color .15s;
+      white-space: nowrap; min-height: 30px; padding: 5px 12px; border-radius: var(--r-pill); font-size: .75rem; font-weight: 500;
+      border: 1px solid var(--edge); color: var(--muted); transition: background .15s, color .15s;
     }
     .tab:hover { background: var(--wash); color: var(--ink); }
     .tab.selected { border-color: var(--ink); background: var(--wash); color: var(--ink); font-weight: 600; }
-    .note { font-size: 12px; color: var(--muted); line-height: 1.45; margin: 4px 0 8px; }
-    .group-label { font-size: 11.5px; color: var(--muted); font-weight: 500; margin: 12px 0 4px; }
+    .note { font-size: .75rem; color: var(--muted); line-height: 1.45; margin: 4px 0 8px; }
+    .group-label { font-size: .71875rem; color: var(--muted); font-weight: 500; margin: 12px 0 4px; }
 
+    /* A voice row: the row is a card; choosing, previewing and favouriting are three sibling buttons. */
+    .voice-list { list-style: none; display: grid; gap: 2px; }
     .voice-row {
-      display: flex; align-items: center; gap: 11px; padding: 7px 8px; border-radius: 14px;
-      border: 1.5px solid transparent; cursor: pointer; transition: background .12s;
+      display: flex; align-items: center; gap: 4px; padding: 3px 6px 3px 3px; border-radius: 14px;
+      border: 1.5px solid transparent; transition: background .12s;
     }
     .voice-row:hover { background: var(--wash); }
     .voice-row.selected { border-color: var(--ink); }
-    .voice-row .avatar { width: 30px; height: 30px; font-size: 12px; }
+    .voice-choose {
+      flex: 1; min-width: 0; display: flex; align-items: center; gap: 11px; padding: 4px 6px 4px 5px;
+      text-align: left; border-radius: 11px;
+    }
+    .voice-choose:focus-visible { outline-offset: 0; }
+    .voice-row .avatar { width: 30px; height: 30px; font-size: .75rem; }
     .voice-row .info { flex: 1; min-width: 0; }
-    .voice-row .name { font-size: 13px; font-weight: 600; display: flex; align-items: center; gap: 6px; }
-    .voice-row .tag { font-size: 10px; font-weight: 600; color: var(--muted); background: var(--chip); padding: 1px 6px; border-radius: 99px; }
-    .voice-row .vibe { font-size: 11.5px; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .voice-row .name { font-size: .8125rem; font-weight: 600; display: flex; align-items: center; gap: 6px; }
+    .voice-row .tag { font-size: .625rem; font-weight: 600; color: var(--muted); background: var(--chip); padding: 1px 6px; border-radius: 99px; }
+    .voice-row .vibe { font-size: .71875rem; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .voice-row .check { width: 15px; height: 15px; flex-shrink: 0; }
     .row-btn {
-      width: 30px; height: 30px; border-radius: 50%; flex-shrink: 0; color: var(--muted);
+      width: 32px; height: 32px; border-radius: 50%; flex-shrink: 0; color: var(--muted);
       display: flex; align-items: center; justify-content: center; transition: background .12s, color .12s;
     }
     .row-btn:hover { background: var(--wash); color: var(--ink); }
@@ -278,45 +307,103 @@
 
     .setting { display: flex; align-items: center; justify-content: space-between; gap: 14px; padding: 14px 0; border-bottom: 1px solid var(--line); }
     .setting:last-child { border-bottom: none; }
-    .setting .t { font-size: 13px; font-weight: 600; }
-    .setting .d { font-size: 12px; color: var(--muted); margin-top: 3px; line-height: 1.45; }
+    .setting.stacked { display: block; }
+    .setting .t { font-size: .8125rem; font-weight: 600; }
+    .setting .d { font-size: .75rem; color: var(--muted); margin-top: 3px; line-height: 1.45; }
     .btn-secondary {
-      height: 32px; padding: 0 14px; border-radius: var(--r-pill); border: 1px solid var(--line);
-      font-size: 12px; font-weight: 500; white-space: nowrap; transition: background .15s;
+      min-height: 32px; padding: 0 14px; border-radius: var(--r-pill); border: 1px solid var(--edge);
+      font-size: .75rem; font-weight: 500; white-space: nowrap; transition: background .15s;
     }
     .btn-secondary:hover { background: var(--wash); }
 
-    /* ─── Switch (role="switch"): track --line / --ink, knob --bg ─── */
+    /* ─── Switch (role="switch"): off = chip track with an edge ring, on = ink track ─── */
     .switch {
-      position: relative; flex-shrink: 0; width: 36px; height: 22px; border-radius: var(--r-pill);
-      background: var(--line); box-shadow: inset 0 0 0 1px var(--wait); transition: background .15s, box-shadow .15s;
+      position: relative; flex-shrink: 0; width: 40px; height: 24px; border-radius: var(--r-pill);
+      background: var(--chip); border: 1.5px solid var(--edge); transition: background .15s, border-color .15s;
     }
     .switch::after {
-      content: ''; position: absolute; top: 3px; left: 3px; width: 16px; height: 16px; border-radius: 50%;
-      background: var(--bg); box-shadow: 0 0 0 1px var(--wait); transition: transform .15s ease, box-shadow .15s;
+      content: ''; position: absolute; top: 2.5px; left: 2.5px; width: 16px; height: 16px; border-radius: 50%;
+      background: var(--muted); transition: transform .15s ease, background .15s;
     }
-    .switch[aria-checked="true"] { background: var(--ink); box-shadow: none; }
-    .switch[aria-checked="true"]::after { transform: translateX(14px); box-shadow: none; }
-    .toggle-row { display: flex; align-items: center; justify-content: space-between; gap: 14px; margin-top: 14px; padding: 2px 2px 0; }
-    .toggle-row .t { font-size: 12.5px; font-weight: 500; }
-    .toggle-row .t small { display: block; font-size: 11.5px; font-weight: 400; color: var(--muted); margin-top: 1px; }
+    .switch[aria-checked="true"] { background: var(--ink); border-color: var(--ink); }
+    .switch[aria-checked="true"]::after { transform: translateX(16px); background: var(--bg); }
+    .toggle-row { display: flex; align-items: center; justify-content: space-between; gap: 14px; margin-top: 10px; padding: 2px 2px 0; }
+    .toggle-row:first-of-type { margin-top: 14px; }
+    .toggle-row .t { font-size: .78125rem; font-weight: 500; }
+
+    /* ─── Segmented control (native radios, so arrow keys just work) ─── */
+    .seg-group { display: flex; gap: 2px; padding: 3px; margin-top: 10px; border: 1px solid var(--edge); border-radius: var(--r-pill); background: var(--chip); }
+    .seg { flex: 1 1 auto; display: flex; position: relative; }
+    .seg span {
+      flex: 1; display: flex; align-items: center; justify-content: center; text-align: center; min-height: 30px; padding: 4px 10px;
+      border-radius: var(--r-pill); font-size: .75rem; font-weight: 500; color: var(--muted); cursor: pointer; white-space: nowrap;
+      transition: background .15s, color .15s;
+    }
+    .seg:hover span { color: var(--ink); }
+    .seg input:checked + span { background: var(--ink); color: var(--bg); font-weight: 600; }
+    .seg input:focus-visible + span { outline: 2px solid var(--ink); outline-offset: 2px; }
+
+    /* Shortcut list in Settings */
+    .sc-list { list-style: none; margin-top: 8px; display: grid; gap: 6px; }
+    .sc-list li { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; font-size: .75rem; }
+    .sc-list .sc-name { color: var(--muted); }
+    .sc-keys { display: inline-flex; gap: 3px; flex-wrap: wrap; justify-content: flex-end; }
+    .sc-none { color: var(--muted); }
+    .sc-list + .d { margin-top: 12px; }
+    .setting .btn-secondary { margin-top: 12px; }
 
     /* ─── Reduced motion: no tap, shimmer, halo, crossfade or ink transition ─── */
     @media (prefers-reduced-motion: reduce) {
       .q.speaking i, .seek.playing input[type=range]::-webkit-slider-thumb, .row-btn.previewing { animation: none !important; }
       .shimmer, .shimmer * { animation: none !important; background: none !important; color: inherit !important; -webkit-text-fill-color: currentColor; }
       .status .extra { color: var(--muted) !important; }
-      .sentence, .sentence.fade, .sentence .w, .q, .sheet, .switch, .switch::after { transition: none !important; animation: none !important; }
+      .sentence, .sentence.fade, .sentence .w, .q, .sheet, .switch, .switch::after, .seg span { transition: none !important; animation: none !important; }
+    }
+
+    /* ─── Forced colours (Windows High Contrast): shapes must survive without our palette ─── */
+    @media (forced-colors: active) {
+      button:focus-visible, input:focus-visible, .seg input:focus-visible + span { outline: 2px solid Highlight; }
+      .btn-primary, .ctl.play { border: 2px solid ButtonText; }
+      .ctl, .icon-btn, .row-btn { border: 1px solid ButtonText; }
+      .ctl.play { border-width: 2px; }
+      .q { border: 1px solid CanvasText; }
+      .switch { border: 2px solid ButtonText; background: Canvas; }
+      .switch::after { background: ButtonText; }
+      .switch[aria-checked="true"] { background: Highlight; border-color: Highlight; forced-color-adjust: none; }
+      .switch[aria-checked="true"]::after { background: HighlightText; forced-color-adjust: none; }
+      input[type=range]::-webkit-slider-runnable-track {
+        height: 4px; forced-color-adjust: none;
+        background: linear-gradient(to right, Highlight var(--fill, 0%), GrayText var(--fill, 0%));
+      }
+      input[type=range]::-webkit-slider-thumb { forced-color-adjust: none; width: 11px; height: 11px; margin-top: -4px; background: ButtonText; }
+      .loadbar { border: 1px solid ButtonText; }
+      .loadbar > div { forced-color-adjust: none; background: Highlight; }
+      .sentence .w { forced-color-adjust: none; color: GrayText; }
+      .sentence .w.read { color: CanvasText; }
+      .sentence .w.now { color: CanvasText; text-decoration-color: Highlight; text-decoration-thickness: 2px; }
+      .speed-option.selected, .tab.selected, .seg input:checked + span {
+        forced-color-adjust: none; background: Highlight; color: HighlightText; border-color: Highlight;
+      }
+      .voice-row { border-color: Canvas; }
+      .voice-row.selected { border-color: Highlight; }
+      .row-btn.previewing { forced-color-adjust: none; background: Highlight; color: HighlightText; }
+      .shimmer, .shimmer * { animation: none; background: none; color: CanvasText; -webkit-text-fill-color: CanvasText; }
+      .error-msg { border-width: 2px; }
+      .seg-group { border-color: ButtonText; }
     }
   </style>
 </head>
 <body>
-  <div class="main" id="main">
+  <!-- One quiet live region for the whole popup. It lives outside the views that
+       come and go, and only ever says what CHANGED (never percents or minutes). -->
+  <div id="sr-status" class="sr-only" role="status" aria-live="polite" aria-atomic="true"></div>
+
+  <main class="main" id="main">
     <div class="header">
       <span class="q" id="quote" aria-hidden="true"><i>&lsquo;</i><i>&lsquo;</i></span>
-      <span class="wordmark">Lector</span>
-      <button class="icon-btn" id="btn-settings" aria-label="Settings" title="Settings">
-        <svg viewBox="0 0 24 24"><path d="M19.14 12.94a7.07 7.07 0 000-1.88l2.03-1.58a.5.5 0 00.12-.64l-1.92-3.32a.5.5 0 00-.6-.22l-2.39.96a7 7 0 00-1.62-.94l-.36-2.54a.5.5 0 00-.5-.42h-3.84a.5.5 0 00-.5.42l-.36 2.54a7 7 0 00-1.62.94l-2.39-.96a.5.5 0 00-.6.22L2.7 8.84a.5.5 0 00.12.64l2.03 1.58a7.07 7.07 0 000 1.88L2.82 14.52a.5.5 0 00-.12.64l1.92 3.32c.13.22.39.3.6.22l2.39-.96c.5.38 1.04.7 1.62.94l.36 2.54c.04.24.25.42.5.42h3.84c.25 0 .46-.18.5-.42l.36-2.54a7 7 0 001.62-.94l2.39.96c.22.09.47 0 .6-.22l1.92-3.32a.5.5 0 00-.12-.64l-2.03-1.58zM12 15.6A3.6 3.6 0 1112 8.4a3.6 3.6 0 010 7.2z"/></svg>
+      <h1 class="wordmark">Lector</h1>
+      <button class="icon-btn" id="btn-settings" aria-label="Settings" title="Settings" aria-haspopup="dialog">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M19.14 12.94a7.07 7.07 0 000-1.88l2.03-1.58a.5.5 0 00.12-.64l-1.92-3.32a.5.5 0 00-.6-.22l-2.39.96a7 7 0 00-1.62-.94l-.36-2.54a.5.5 0 00-.5-.42h-3.84a.5.5 0 00-.5.42l-.36 2.54a7 7 0 00-1.62.94l-2.39-.96a.5.5 0 00-.6.22L2.7 8.84a.5.5 0 00.12.64l2.03 1.58a7.07 7.07 0 000 1.88L2.82 14.52a.5.5 0 00-.12.64l1.92 3.32c.13.22.39.3.6.22l2.39-.96c.5.38 1.04.7 1.62.94l.36 2.54c.04.24.25.42.5.42h3.84c.25 0 .46-.18.5-.42l.36-2.54a7 7 0 001.62-.94l2.39.96c.22.09.47 0 .6-.22l1.92-3.32a.5.5 0 00-.12-.64l-2.03-1.58zM12 15.6A3.6 3.6 0 1112 8.4a3.6 3.6 0 010 7.2z"/></svg>
       </button>
     </div>
 
@@ -331,40 +418,40 @@
       <div class="page-hint">Reads the article on this tab</div>
 
       <button class="btn-primary" id="btn-start">
-        <svg viewBox="0 0 24 24"><path d="M8 5v14l11-7z"/></svg>
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M8 5v14l11-7z"/></svg>
         <span id="btn-start-label">Listen to this page</span>
       </button>
 
       <div class="label">Voice</div>
-      <button class="voice-card" data-open-voices aria-label="Change voice">
-        <div class="avatar" data-voice-avatar></div>
-        <div class="info"><div class="name" data-voice-name></div><div class="vibe" data-voice-vibe></div></div>
+      <button class="voice-card" data-open-voices aria-haspopup="dialog">
+        <span class="avatar" data-voice-avatar aria-hidden="true"></span>
+        <span class="info"><span class="sr-only">Voice: </span><span class="name" data-voice-name></span><span class="vibe" data-voice-vibe></span></span>
         <span class="chev">Change</span>
       </button>
 
-      <div class="label">Speed</div>
-      <div class="speed-row" data-speed-row role="group" aria-label="Speed"></div>
+      <div class="label" id="lbl-speed-idle">Speed</div>
+      <div class="speed-row" data-speed-row role="group" aria-labelledby="lbl-speed-idle"></div>
 
       <div id="first-run" class="banner hidden">
         <strong>First time?</strong> Your first listen downloads the voice once. After that, Lector works offline and nothing you read ever leaves your computer.
       </div>
 
       <div class="tips">
-        <div class="tip"><span><kbd>Alt</kbd> <kbd>Shift</kbd> <kbd>R</kbd></span><span>Start or pause from any tab</span></div>
+        <div class="tip" id="tip-read"><span id="tip-read-keys"></span><span>Start or pause from any tab</span></div>
         <div class="tip"><span><kbd>Right-click</kbd></span><span>Select text, then <b>Listen from here</b></span></div>
       </div>
     </div>
 
     <!-- Player: what is being read, where am I, what can I do -->
     <div id="player-view" class="hidden">
-      <div id="status-line" class="status" aria-live="polite" aria-atomic="true">
+      <div id="status-line" class="status" tabindex="-1">
         <span id="status-text"></span><span class="extra" id="status-extra"></span>
       </div>
       <div class="status-sub hidden" id="status-sub"></div>
       <div class="player-title" id="player-title"></div>
 
       <div id="load-block" class="hidden">
-        <div class="loadbar" role="progressbar" aria-label="Voice download" aria-valuemin="0" aria-valuemax="100" id="load-bar"><div id="load-fill"></div></div>
+        <div class="loadbar" id="load-bar" aria-hidden="true"><div id="load-fill"></div></div>
         <button class="linkish" id="btn-cancel">Cancel</button>
       </div>
 
@@ -382,16 +469,16 @@
         <div class="controls" id="controls">
           <div>
             <button class="ctl stop" id="btn-stop" aria-label="Stop" title="Stop">
-              <svg viewBox="0 0 24 24"><rect x="5" y="5" width="14" height="14" rx="2.5"/></svg>
+              <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="5" y="5" width="14" height="14" rx="2.5"/></svg>
             </button>
           </div>
           <div class="ctl-mid">
             <button class="ctl" id="btn-prev" aria-label="Previous paragraph" title="Previous paragraph (←)">
-              <svg viewBox="0 0 24 24"><path d="M6 6h2v12H6zm3.5 6l8.5 6V6z"/></svg>
+              <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 6h2v12H6zm3.5 6l8.5 6V6z"/></svg>
             </button>
             <button class="ctl play" id="btn-play" aria-label="Play" title="Play / pause (Space)"></button>
             <button class="ctl" id="btn-next" aria-label="Next paragraph" title="Next paragraph (→)">
-              <svg viewBox="0 0 24 24"><path d="M6 18l8.5-6L6 6zM16 6h2v12h-2z"/></svg>
+              <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 18l8.5-6L6 6zM16 6h2v12h-2z"/></svg>
             </button>
           </div>
           <div></div>
@@ -399,9 +486,9 @@
       </div>
 
       <div class="player-pickers">
-        <button class="voice-card" data-open-voices aria-label="Change voice">
-          <div class="avatar" data-voice-avatar></div>
-          <div class="info"><div class="name" data-voice-name></div><div class="vibe" data-voice-vibe></div></div>
+        <button class="voice-card" data-open-voices aria-haspopup="dialog">
+          <span class="avatar" data-voice-avatar aria-hidden="true"></span>
+          <span class="info"><span class="sr-only">Voice: </span><span class="name" data-voice-name></span><span class="vibe" data-voice-vibe></span></span>
           <span class="chev">Change</span>
         </button>
         <div class="speed-row" data-speed-row role="group" aria-label="Speed"></div>
@@ -411,27 +498,32 @@
         <span class="t" id="lbl-show-player">Show on page</span>
         <button class="switch" role="switch" aria-checked="true" aria-labelledby="lbl-show-player" data-pref="showOnPage"></button>
       </div>
+      <div class="toggle-row">
+        <span class="t" id="lbl-follow-player">Scroll to follow</span>
+        <button class="switch" role="switch" aria-checked="true" aria-labelledby="lbl-follow-player" data-pref="followScroll"></button>
+      </div>
     </div>
-  </div>
+  </main>
 
   <!-- Voice picker -->
-  <div class="sheet hidden" id="voice-sheet" role="dialog" aria-label="Choose a voice">
+  <div class="sheet hidden" id="voice-sheet" role="dialog" aria-modal="true" aria-labelledby="voice-title">
     <div class="sheet-head">
-      <h2>Choose a voice</h2>
-      <button class="icon-btn" id="close-voices" aria-label="Close"><svg viewBox="0 0 24 24"><path d="M19 6.4L17.6 5 12 10.6 6.4 5 5 6.4 10.6 12 5 17.6 6.4 19 12 13.4 17.6 19 19 17.6 13.4 12z"/></svg></button>
+      <h2 id="voice-title">Choose a voice</h2>
+      <button class="icon-btn" id="close-voices" aria-label="Close"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M19 6.4L17.6 5 12 10.6 6.4 5 5 6.4 10.6 12 5 17.6 6.4 19 12 13.4 17.6 19 19 17.6 13.4 12z"/></svg></button>
     </div>
     <div class="sheet-body">
-      <input class="search" id="voice-search" placeholder="Search voices" aria-label="Search voices">
-      <div class="tabs" id="voice-tabs"></div>
+      <input class="search" id="voice-search" type="text" placeholder="Search voices" aria-label="Search voices" autocomplete="off" spellcheck="false">
+      <div class="tabs" id="voice-tabs" role="group" aria-label="Filter voices"></div>
+      <p class="sr-only" id="voice-count" role="status"></p>
       <div id="voice-list"></div>
     </div>
   </div>
 
   <!-- Settings -->
-  <div class="sheet hidden" id="settings-sheet" role="dialog" aria-label="Settings">
+  <div class="sheet hidden" id="settings-sheet" role="dialog" aria-modal="true" aria-labelledby="settings-title">
     <div class="sheet-head">
-      <h2>Settings</h2>
-      <button class="icon-btn" id="close-settings" aria-label="Close"><svg viewBox="0 0 24 24"><path d="M19 6.4L17.6 5 12 10.6 6.4 5 5 6.4 10.6 12 5 17.6 6.4 19 12 13.4 17.6 19 19 17.6 13.4 12z"/></svg></button>
+      <h2 id="settings-title" tabindex="-1">Settings</h2>
+      <button class="icon-btn" id="close-settings" aria-label="Close"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M19 6.4L17.6 5 12 10.6 6.4 5 5 6.4 10.6 12 5 17.6 6.4 19 12 13.4 17.6 19 19 17.6 13.4 12z"/></svg></button>
     </div>
     <div class="sheet-body">
       <div class="setting">
@@ -442,20 +534,26 @@
         <div><div class="t" id="lbl-follow">Scroll to follow</div><div class="d">Keep the sentence on screen while it's read</div></div>
         <button class="switch" role="switch" aria-checked="true" aria-labelledby="lbl-follow" data-pref="followScroll"></button>
       </div>
+      <div class="setting stacked">
+        <div class="t" id="lbl-quality">Voice quality</div>
+        <div class="seg-group" id="quality-seg" role="radiogroup" aria-labelledby="lbl-quality" aria-describedby="quality-desc quality-note">
+          <label class="seg"><input class="sr-only" type="radio" name="quality" value="auto"><span>Auto</span></label>
+          <label class="seg"><input class="sr-only" type="radio" name="quality" value="small"><span>Smaller download</span></label>
+          <label class="seg"><input class="sr-only" type="radio" name="quality" value="smooth"><span>Smoother</span></label>
+        </div>
+        <div class="d" id="quality-desc"></div>
+        <div class="d" id="quality-note">Applies the next time Lector starts.</div>
+      </div>
       <div class="setting">
         <div><div class="t">Saved audio</div><div class="d" id="cache-note">Lector remembers what it has already voiced so repeat listens are instant.</div></div>
         <button class="btn-secondary" id="btn-clear-cache">Clear</button>
       </div>
-      <div class="setting">
-        <div><div class="t">Shortcuts</div>
-          <div class="d" style="line-height:2">
-            <span class="kbd">Alt+Shift+R</span> start / pause<br>
-            <span class="kbd">Alt+Shift+→</span> next paragraph<br>
-            <span class="kbd">Alt+Shift+←</span> previous paragraph<br>
-            <span class="kbd">Alt+Click</span> a paragraph to read from there
-          </div>
-          <div class="d" style="margin-top:6px">Change them at chrome://extensions/shortcuts</div>
-        </div>
+      <div class="setting stacked">
+        <div class="t">Shortcuts</div>
+        <ul class="sc-list" id="shortcut-list"></ul>
+        <div class="d">While reading: Alt+Click (Option+Click on a Mac) a paragraph to jump there. Listen from here starts at your selection, the focused paragraph, or the top of the screen.</div>
+        <div class="d" id="sr-tip"></div>
+        <button class="btn-secondary" id="btn-shortcuts">Change shortcuts</button>
       </div>
       <div class="setting">
         <div><div class="t">Privacy</div><div class="d">Voices run on your device. No account, no server, and no page content is ever sent anywhere. The voice is downloaded once from Hugging Face.</div></div>

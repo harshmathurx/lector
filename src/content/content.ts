@@ -270,8 +270,72 @@ function findParagraphIndexFor(node: Node | null, list: Source[]): number {
   return 0;
 }
 
+// ─── Article metadata for the OS (Now Playing) ──────────────────────────────
+
+const meta = (sel: string): string => document.querySelector<HTMLMetaElement>(sel)?.content?.trim() ?? '';
+
+/** Lead image: the page's own share image, else the first large picture in the article. */
+function leadImageUrl(): string | undefined {
+  const candidates = [
+    meta('meta[property="og:image:secure_url"]'),
+    meta('meta[property="og:image"]'),
+    meta('meta[name="twitter:image"]'),
+    meta('meta[name="twitter:image:src"]'),
+    document.querySelector<HTMLLinkElement>('link[rel="image_src"]')?.href ?? '',
+  ];
+  for (const img of document.querySelectorAll<HTMLImageElement>('article img, main img, [role="main"] img')) {
+    if (img.complete && img.naturalWidth >= 300 && img.naturalHeight >= 200) {
+      candidates.push(img.currentSrc || img.src);
+      break;
+    }
+  }
+  for (const c of candidates) {
+    if (!c || c.length > 2000) continue;
+    try {
+      const u = new URL(c, location.href);
+      if ((u.protocol === 'https:' || u.protocol === 'http:') && !/\.svg(\?|$)/i.test(u.pathname)) return u.href;
+    } catch {
+      /* not a URL */
+    }
+  }
+  return undefined;
+}
+
+/** Starts loading the image now; resolves false only if it definitely cannot load. */
+function probeImage(url: string): Promise<boolean> {
+  return new Promise((resolve) => {
+    const img = new Image();
+    img.onload = () => resolve(true);
+    img.onerror = () => resolve(false);
+    img.src = url;
+  });
+}
+
+/** og:site_name, else the author, else the hostname without "www.". */
+function siteName(): string {
+  const author = meta('meta[name="author"]') || meta('meta[property="article:author"]');
+  return meta('meta[property="og:site_name"]') || (author && !/^https?:/i.test(author) ? author : '') || location.hostname.replace(/^www\./, '');
+}
+
+/** Where "listen from here" starts when nothing is selected: the caret, the focused element, else the top of the screen. */
+function hereIndex(list: Source[], selection: Selection | null): number | null {
+  const anchor = selection?.rangeCount ? selection.anchorNode : null;
+  const anchorEl = anchor && (anchor.nodeType === Node.ELEMENT_NODE ? (anchor as Element) : anchor.parentElement);
+  if (anchor && anchorEl && document.body.contains(anchorEl) && !anchorEl.closest('input,textarea')) {
+    return findParagraphIndexFor(anchor, list);
+  }
+  const active = document.activeElement;
+  if (active && active !== document.body && active !== document.documentElement) return findParagraphIndexFor(active, list);
+  const top = list.findIndex((b) => {
+    if (!b.el) return false;
+    const r = b.el.getBoundingClientRect();
+    return r.height > 0 && r.bottom > 24;
+  });
+  return top === -1 ? null : top;
+}
+
 function extract(mode: 'article' | 'selection' | 'fromSelection'): Article | null {
-  const lang = document.documentElement.lang || navigator.language || 'en';
+  const lang = document.documentElement.lang || 'en';
   const title = document.title.trim();
   const selection = window.getSelection();
   const selectedText = selection?.toString().trim() ?? '';
@@ -286,7 +350,7 @@ function extract(mode: 'article' | 'selection' | 'fromSelection'): Article | nul
     resetHighlightState();
     sources = paragraphs.map((p) => makeSource(p.text, null));
     seedDocHintFromSelection(selection);
-    return { title: title || 'Selected text', lang, url: location.href, paragraphs, startParagraph: 0 };
+    return { title: title || 'Selected text', lang, url: location.href, paragraphs, startParagraph: 0, site: siteName() };
   }
 
   const extracted = extractWithReadability() ?? extractFallback();
@@ -311,10 +375,8 @@ function extract(mode: 'article' | 'selection' | 'fromSelection'): Article | nul
   sources = list;
 
   let startParagraph = offset;
-  if (mode === 'fromSelection' && selection && selection.rangeCount) {
-    startParagraph = findParagraphIndexFor(selection.anchorNode, list);
-  }
-  return { title: title || 'Untitled page', lang, url: location.href, paragraphs, startParagraph };
+  if (mode === 'fromSelection') startParagraph = hereIndex(list, selection) ?? offset;
+  return { title: title || 'Untitled page', lang, url: location.href, paragraphs, startParagraph, site: siteName() };
 }
 
 // ─── Highlighting ───────────────────────────────────────────────────────────
@@ -328,6 +390,8 @@ function extract(mode: 'article' | 'selection' | 'fromSelection'): Article | nul
 
 let reading = false;
 let lastUserScroll = 0;
+/** After the user scrolls, leave the page alone this long (a magnifier user reads ahead). */
+const USER_SCROLL_YIELD_MS = 10000;
 
 const SEG_HL = 'lector-seg';
 const READ_HL = 'lector-read';
@@ -540,6 +604,9 @@ interface Ink {
 
 let ink: Ink | null = null;
 let inkFrame = 0;
+let inkTimer: ReturnType<typeof setTimeout> | undefined;
+/** Under reduced motion the underline still tracks the reading, but in steps instead of a smooth sweep. */
+const CALM_INK_STEP_MS = 400;
 
 function wordEndsOf(text: string): number[] {
   const ends: number[] = [];
@@ -550,6 +617,8 @@ function wordEndsOf(text: string): number[] {
 function stopInk(): void {
   if (inkFrame) cancelAnimationFrame(inkFrame);
   inkFrame = 0;
+  if (inkTimer) clearTimeout(inkTimer);
+  inkTimer = undefined;
 }
 
 /** Returns false when the nodes behind the underline are gone. */
@@ -584,14 +653,22 @@ function inkFrameTick(now: number): void {
     }
     return;
   }
-  if (fraction < 1) inkFrame = requestAnimationFrame(inkFrameTick);
+  if (fraction >= 1) return;
+  if (reducedMotion.matches) {
+    inkTimer = setTimeout(() => {
+      inkTimer = undefined;
+      inkFrameTick(performance.now());
+    }, CALM_INK_STEP_MS);
+  } else {
+    inkFrame = requestAnimationFrame(inkFrameTick);
+  }
 }
 
 function startInk(r: Resolved, durationMs: number, offsetMs: number, frozen: boolean): void {
   stopInk();
   highlights()?.delete(READ_HL);
   ink = null;
-  if (!(durationMs > 0) || reducedMotion.matches) return;
+  if (!(durationMs > 0)) return;
   const text = r.map.text.slice(r.start, r.end);
   const wordEnds = wordEndsOf(text);
   if (!wordEnds.length) return;
@@ -705,7 +782,7 @@ function clearHighlight(): void {
 
 /** Keep the spoken text on screen, but never fight a user who is scrolling. */
 function scrollIntoComfort(range: Range): void {
-  if (Date.now() - lastUserScroll < 4000) return;
+  if (Date.now() - lastUserScroll < USER_SCROLL_YIELD_MS) return;
   const rect = range.getBoundingClientRect();
   if (!rect.width && !rect.height) return; // collapsed or hidden text: nowhere to scroll to
   const h = window.innerHeight;
@@ -739,9 +816,10 @@ function register(): void {
   document.addEventListener(
     'click',
     (e) => {
-      if (!current() || !reading || !e.altKey) return;
+      if (!current() || !reading || !e.altKey || e.defaultPrevented) return;
       const target = e.target instanceof Element ? e.target : null;
-      if (!target) return;
+      // Links, buttons and fields keep their own Alt+click (e.g. "download link").
+      if (!target || target.closest('a[href],button,input,select,textarea,summary,label,[contenteditable],[role="button"],[role="link"]')) return;
       const idx = sources.findIndex((b) => b.el && b.el.contains(target));
       if (idx === -1) return;
       e.preventDefault();
@@ -773,10 +851,22 @@ function register(): void {
           sendResponse({ pong: true });
           return false;
         case 'EXTRACT_ARTICLE': {
+          // Start fetching the lead image first: it loads while Readability runs.
+          const imageUrl = leadImageUrl();
+          const probe = imageUrl ? probeImage(imageUrl) : null;
           const article = extract(message.mode);
           reading = article !== null;
-          sendResponse(article);
-          return false;
+          if (!article || !imageUrl || !probe) {
+            sendResponse(article);
+            return false;
+          }
+          // Wait briefly for the image to prove it loads; a slow one is assumed fine.
+          const slow = new Promise<boolean>((resolve) => setTimeout(() => resolve(true), 700));
+          void Promise.race([probe, slow]).then((ok) => {
+            if (ok) article.image = imageUrl;
+            sendResponse(article);
+          });
+          return true;
         }
         case 'VB_HIGHLIGHT':
           highlightSegment(message.paraIndex, message.start, message.end, message.durationMs, message.offsetMs);

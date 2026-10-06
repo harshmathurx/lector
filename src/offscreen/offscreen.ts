@@ -10,11 +10,13 @@ import type {
   OffscreenEvent,
   OffscreenRequest,
   PlayerState,
+  Quality,
   Status,
 } from '../shared/protocol';
 import { IDLE_STATE } from '../shared/protocol';
 import { chunkParagraph } from '../shared/chunker';
 import { prepareForSpeech } from '../shared/speech';
+import { cleanTitle } from '../shared/title';
 import { cacheClear, cacheGet, cacheKey, cachePut } from './cache';
 import { engineDevice, engineInfo, ensureEngine, isEngineReady, synthesize } from './engine';
 import type { LoadOptions } from './engine';
@@ -49,6 +51,7 @@ let segments: Segment[] = [];
 let totalChars = 0;
 let voice = 'af_heart';
 let speed = 1;
+let quality: Quality = 'auto';
 
 let status: Status = 'idle';
 let errorMessage: string | undefined;
@@ -124,7 +127,7 @@ function setSpeedFlag(v: string): void {
   }
 }
 function engineOptions(): Omit<LoadOptions, 'wasmBase'> {
-  return { ...debug, gpuSlowBefore: speedFlag() === 'slow' };
+  return { quality, ...debug, gpuSlowBefore: speedFlag() === 'slow' };
 }
 
 let speedNoted = false;
@@ -162,6 +165,15 @@ function setStatus(next: Status, error?: string): void {
   setKeepAlive(next === 'loading' || next === 'buffering' || next === 'starting');
   send({ type: 'VB_EVENT', kind: 'status', status: next, error: errorMessage });
   updateMediaSession();
+}
+
+let lastProgressPct = -1;
+/** Tell the background about download progress, one event per whole percent. */
+function sendProgress(fraction: number): void {
+  const pct = Math.floor(fraction * 100);
+  if (pct === lastProgressPct) return;
+  lastProgressPct = pct;
+  send({ type: 'VB_EVENT', kind: 'progress', fraction });
 }
 
 /**
@@ -390,7 +402,7 @@ async function pump(): Promise<void> {
         buffers.set(idx, result);
         if (result === 'failed') speechSecs.delete(idx);
         if (consecutiveFailures >= MAX_CONSECUTIVE_FAILURES) {
-          fail('The voice engine kept failing on this page. Try a different voice, or reload the page and try again.');
+          fail('Lector could not read this page with that voice. Try a different voice, or reload the page and try again.');
           return;
         }
         if (!source) tryPlay();
@@ -474,6 +486,7 @@ function tryPlay(): void {
   setStatus('playing');
   const speechMs = (speechSecs.get(playIdx) ?? buf.duration) * 1000;
   emitSegment(speechMs, Math.min(offset * 1000, speechMs));
+  updateMediaPosition();
 }
 
 function advance(): void {
@@ -510,6 +523,7 @@ function jumpToSegment(idx: number): void {
   playOffset = 0;
   evictBehind();
   void pump();
+  updateMediaPosition();
   if (status === 'paused') emitSegment();
   else tryPlay();
 }
@@ -582,6 +596,7 @@ function changeSpeed(next: number): void {
   shownSecPerChar *= speed / next;
   speed = next;
   invalidateAudio();
+  updateMediaPosition();
 }
 
 /** Voice/speed changed: drop decoded audio and regenerate from this segment. */
@@ -642,6 +657,7 @@ function resetSession(silent = false): void {
   consecutiveFailures = 0;
   loadProgress = 0;
   errorMessage = undefined;
+  clearMediaSession();
   // A restart must not announce "idle": the background would end the session
   // it just stored for the new one.
   if (silent) status = 'idle';
@@ -655,7 +671,7 @@ function fail(message: string): void {
   suspendAudio();
 }
 
-async function startSession(art: Article, v: string, s: number): Promise<void> {
+async function startSession(art: Article, v: string, s: number, q: Quality): Promise<void> {
   resetSession(true);
   const mine = sessionId;
   stats.segs.length = 0;
@@ -668,6 +684,8 @@ async function startSession(art: Article, v: string, s: number): Promise<void> {
   article = art;
   voice = v;
   speed = s;
+  quality = q;
+  lastProgressPct = -1;
   segments = buildSegments(art);
   if (!segments.length) {
     article = null;
@@ -676,7 +694,7 @@ async function startSession(art: Article, v: string, s: number): Promise<void> {
   }
   playIdx = Math.max(0, firstSegmentOfParagraph(art.startParagraph));
   rampFrom = playIdx;
-  setupMediaSession(art.title);
+  setupMediaSession(art);
   getCtx();
 
   if (!isEngineReady()) {
@@ -684,7 +702,9 @@ async function startSession(art: Article, v: string, s: number): Promise<void> {
     try {
       const t0 = performance.now();
       await ensureEngine((p) => {
-        if (mine === sessionId) loadProgress = p;
+        if (mine !== sessionId) return;
+        loadProgress = p;
+        sendProgress(p);
       }, engineOptions());
       stats.loadMs = performance.now() - t0;
       stats.info = engineInfo();
@@ -694,8 +714,8 @@ async function startSession(art: Article, v: string, s: number): Promise<void> {
       if (mine === sessionId) {
         fail(
           navigator.onLine
-            ? 'Could not load the voice model. Please try again.'
-            : 'The voice model needs a one-time download. Connect to the internet and try again.'
+            ? 'Lector could not load the voice. Check your connection and try again.'
+            : 'Lector needs a one-time voice download. Connect to the internet and try again.'
         );
       }
       return;
@@ -711,37 +731,189 @@ function stopSession(): void {
   resetSession();
 }
 
-// ─── Media session (hardware media keys, Now Playing) ──────────────────────
+// ─── Media session (hardware media keys, OS Now Playing) ───────────────────
+// Everything the OS shows comes from here: who is reading what, the scrubber
+// (setPositionState), and which buttons exist. Audio is Web Audio, and speed is
+// baked into the audio, so playbackRate stays 1. Position and duration reuse the
+// popup's clock (shownSecPerChar), which freezes while paused, so the OS
+// scrubber never creeps and never passes the end.
 
-function setupMediaSession(title: string): void {
+const SEEK_STEP_SEC = 15;
+const POSITION_REFRESH_MS = 5000;
+const MEDIA_ACTIONS: MediaSessionAction[] = [
+  'play', 'pause', 'stop', 'previoustrack', 'nexttrack', 'seekbackward', 'seekforward', 'seekto',
+];
+
+/** Last values handed to the OS: lets tests (and DevTools) see what Now Playing shows. */
+const mediaDebug = {
+  metadata: null as null | { title: string; artist: string; album: string; artwork: string[] },
+  position: null as null | { duration: number; position: number; playbackRate: number },
+  positionCalls: 0,
+  cleared: 0,
+};
+(globalThis as unknown as { __lectorMedia: typeof mediaDebug }).__lectorMedia = mediaDebug;
+
+let mediaTimer: ReturnType<typeof setInterval> | null = null;
+let fallbackArt: Promise<MediaImage[]> | null = null;
+
+/** The bundled artwork as data: URIs, so the OS never has to fetch an extension URL. */
+function fallbackArtwork(): Promise<MediaImage[]> {
+  fallbackArt ??= Promise.all(
+    [512, 256].map(async (n) => {
+      const url = chrome.runtime.getURL(`icons/artwork-${n}.png`);
+      try {
+        const blob = await (await fetch(url)).blob();
+        const src = await new Promise<string>((resolve, reject) => {
+          const r = new FileReader();
+          r.onload = () => resolve(String(r.result));
+          r.onerror = () => reject(r.error);
+          r.readAsDataURL(blob);
+        });
+        return { src, sizes: `${n}x${n}`, type: 'image/png' };
+      } catch {
+        return { src: url, sizes: `${n}x${n}`, type: 'image/png' };
+      }
+    })
+  );
+  return fallbackArt;
+}
+
+function hostOf(url: string): string {
+  try {
+    return new URL(url).hostname.replace(/^www\./, '');
+  } catch {
+    return '';
+  }
+}
+
+function setupMediaSession(art: Article): void {
   if (!('mediaSession' in navigator)) return;
-  navigator.mediaSession.metadata = new MediaMetadata({ title, artist: 'Lector' });
-  navigator.mediaSession.setActionHandler('play', resume);
-  navigator.mediaSession.setActionHandler('pause', pause);
-  navigator.mediaSession.setActionHandler('nexttrack', nextParagraph);
-  navigator.mediaSession.setActionHandler('previoustrack', prevParagraph);
+  const ms = navigator.mediaSession;
+  const handlers: Partial<Record<MediaSessionAction, MediaSessionActionHandler>> = {
+    play: resume,
+    pause: pause,
+    stop: stopSession,
+    previoustrack: prevParagraph,
+    nexttrack: nextParagraph,
+    seekbackward: (d) => seekBySeconds(-(d.seekOffset ?? SEEK_STEP_SEC)),
+    seekforward: (d) => seekBySeconds(d.seekOffset ?? SEEK_STEP_SEC),
+    seekto: (d) => {
+      const { total } = clock();
+      if (d.seekTime != null && total > 0) seekToProgress(d.seekTime / total);
+    },
+  };
+  for (const a of MEDIA_ACTIONS) {
+    try {
+      ms.setActionHandler(a, handlers[a] ?? null);
+    } catch {
+      /* action not supported on this platform */
+    }
+  }
+
+  const mine = sessionId;
+  void fallbackArtwork().then((fallback) => {
+    if (mine !== sessionId || !article) return;
+    const artwork: MediaImage[] = [];
+    if (art.image) artwork.push({ src: art.image, sizes: '512x512' });
+    artwork.push(...fallback);
+    const title = cleanTitle(art.title) || 'Lector';
+    const artist = art.site || hostOf(art.url) || 'Lector';
+    ms.metadata = new MediaMetadata({ title, artist, album: 'Lector', artwork });
+    mediaDebug.metadata = { title, artist, album: 'Lector', artwork: artwork.map((a) => (a.src.startsWith('data:') ? 'data:' + a.sizes : a.src)) };
+    console.log('[Lector] mediaSession', JSON.stringify({ title, artist, art: art.image ?? 'bundled' }));
+    updateMediaPosition();
+  });
+}
+
+function clearMediaSession(): void {
+  if (mediaTimer) clearInterval(mediaTimer);
+  mediaTimer = null;
+  if (!('mediaSession' in navigator)) return;
+  const ms = navigator.mediaSession;
+  ms.metadata = null;
+  for (const a of MEDIA_ACTIONS) {
+    try {
+      ms.setActionHandler(a, null);
+    } catch {
+      /* unsupported */
+    }
+  }
+  try {
+    ms.setPositionState();
+  } catch {
+    /* nothing to clear */
+  }
+  mediaDebug.metadata = null;
+  mediaDebug.position = null;
+  mediaDebug.cleared++;
+}
+
+/** Keep the OS scrubber honest: on every segment start, pause, resume, seek, speed change, and every few seconds while playing. */
+function updateMediaPosition(): void {
+  if (!('mediaSession' in navigator) || !article || !totalChars) return;
+  const { elapsed, total } = clock();
+  if (!(total > 0) || !Number.isFinite(total)) return;
+  const pos = { duration: total, position: Math.min(Math.max(0, elapsed), total), playbackRate: 1 };
+  try {
+    navigator.mediaSession.setPositionState(pos);
+    mediaDebug.position = pos;
+    mediaDebug.positionCalls++;
+  } catch (e) {
+    console.warn('[Lector] setPositionState failed', e);
+  }
 }
 
 function updateMediaSession(): void {
   if (!('mediaSession' in navigator)) return;
   navigator.mediaSession.playbackState =
     status === 'playing' || status === 'buffering' ? 'playing' : status === 'paused' ? 'paused' : 'none';
+  if (status === 'playing' && !mediaTimer) mediaTimer = setInterval(updateMediaPosition, POSITION_REFRESH_MS);
+  else if (status !== 'playing' && mediaTimer) {
+    clearInterval(mediaTimer);
+    mediaTimer = null;
+  }
+  updateMediaPosition();
+}
+
+function seekBySeconds(delta: number): void {
+  const { elapsed, total } = clock();
+  if (!(total > 0)) return;
+  seekToProgress((elapsed + delta) / total);
 }
 
 // ─── State snapshot ─────────────────────────────────────────────────────────
 
-function getState(): PlayerState {
+/** Characters of the article spoken so far (fractional within the current segment). */
+function charsDoneNow(): number {
+  const seg = segments[playIdx];
+  if (!seg) return 0;
+  const buf = buffers.get(playIdx);
+  const dur = buf instanceof AudioBuffer ? buf.duration : 0;
+  const frac = dur > 0 ? Math.min(1, currentOffset() / dur) : 0;
+  return seg.cumChars + frac * seg.chars;
+}
+
+/** The clock shown to the user (popup and OS): seconds spoken and in total. */
+function clock(): { elapsed: number; total: number } {
   if (status === 'playing' || shownSecPerChar === DEFAULT_SEC_PER_CHAR) shownSecPerChar = secPerChar;
+  return { elapsed: charsDoneNow() * shownSecPerChar, total: totalChars * shownSecPerChar };
+}
+
+function enginePublic(): { device: PlayerState['device']; threads: number | null } {
+  const info = engineInfo();
+  return { device: engineDevice(), threads: info && info.device === 'wasm' ? info.threads : null };
+}
+
+function getState(): PlayerState {
+  clock(); // refresh the displayed rate
   if (!article) {
-    return { ...IDLE_STATE, status, voice, speed, error: errorMessage, device: engineDevice() };
+    return { ...IDLE_STATE, status, voice, speed, error: errorMessage, ...enginePublic() };
   }
   const seg = segments[playIdx];
   const buf = buffers.get(playIdx);
-  const dur = buf instanceof AudioBuffer ? buf.duration : 0;
-  const frac = seg && dur > 0 ? Math.min(1, currentOffset() / dur) : 0;
   const speech = speechSecs.get(playIdx) ?? 0;
   const segProgress = speech > 0 && buf instanceof AudioBuffer ? Math.min(1, currentOffset() / speech) : 0;
-  const charsDone = seg ? seg.cumChars + frac * seg.chars : 0;
+  const charsDone = charsDoneNow();
   const known = status !== 'loading' && status !== 'starting';
   return {
     status,
@@ -754,7 +926,8 @@ function getState(): PlayerState {
     elapsed: charsDone * shownSecPerChar,
     remaining: known ? Math.max(0, (totalChars - charsDone) * shownSecPerChar) : null,
     loadProgress,
-    device: engineDevice(),
+    ...enginePublic(),
+    lang: article.lang,
     currentText: seg?.text ?? '',
     segProgress,
     error: errorMessage,
@@ -793,7 +966,7 @@ chrome.runtime.onMessage.addListener((message: OffscreenRequest, _sender, sendRe
       sendResponse({ pong: true });
       return false;
     case 'TTS_START':
-      void startSession(message.article, message.voice, message.speed);
+      void startSession(message.article, message.voice, message.speed, message.quality ?? 'auto');
       sendResponse({ ok: true });
       return false;
     case 'TTS_COMMAND':
@@ -806,7 +979,10 @@ chrome.runtime.onMessage.addListener((message: OffscreenRequest, _sender, sendRe
     case 'TTS_WARM':
       // Preload the model so the next "listen" starts instantly. Failure is
       // fine here: the real start will retry and report the error.
-      if (!isEngineReady()) void ensureEngine(() => {}, engineOptions()).catch(() => {});
+      if (!isEngineReady()) {
+        quality = message.quality ?? quality;
+        void ensureEngine(() => {}, engineOptions()).catch(() => {});
+      }
       sendResponse({ ok: true });
       return false;
     case 'TTS_CLEAR_CACHE':

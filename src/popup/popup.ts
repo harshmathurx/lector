@@ -1,8 +1,9 @@
 // Popup: the only UI surface. It holds no playback state of its own, it polls
 // the background for PlayerState and renders it.
 
-import type { BackgroundRequest, Command, PlayerState } from '../shared/protocol';
-import { IDLE_STATE, SPEEDS } from '../shared/protocol';
+import type { BackgroundRequest, Command, PlayerState, Quality } from '../shared/protocol';
+import { IDLE_STATE, QUALITIES, SPEEDS } from '../shared/protocol';
+import { cleanTitle } from '../shared/title';
 import { DEFAULT_VOICE, findVoice, VOICES, type Voice } from '../shared/voices';
 
 const $ = <T extends HTMLElement>(id: string) => document.getElementById(id) as T;
@@ -21,9 +22,13 @@ let previewAudio: HTMLAudioElement | null = null;
 let previewingId: string | null = null;
 type VoiceTab = 'all' | 'us' | 'uk' | 'favorites';
 let voiceTab: VoiceTab = 'all';
-let errorTimer: ReturnType<typeof setTimeout> | null = null;
 let hasError = false;
+let lastError = ''; // the message currently shown, so a repeat never re-fires the alert
+let errorFromState = false; // shown because the engine is in error (clears when it leaves error)
 let sheetOpener: HTMLElement | null = null;
+let quality: Quality = 'auto';
+let modelReady = false; // the voice is already on this computer (no download coming)
+let pausedForPreview = false;
 
 const reducedMotion = matchMedia('(prefers-reduced-motion: reduce)').matches;
 
@@ -45,7 +50,9 @@ async function sendCommand(command: Command): Promise<void> {
 // ─── Prefs ──────────────────────────────────────────────────────────────────
 
 async function loadPrefs(): Promise<void> {
-  const r = await chrome.storage.local.get(['defaultVoice', 'defaultSpeed', 'favoriteVoices', 'firstRun', 'showOnPage', 'followScroll']);
+  const r = await chrome.storage.local.get(['defaultVoice', 'defaultSpeed', 'favoriteVoices', 'firstRun', 'showOnPage', 'followScroll', 'lectorQuality', 'modelReady']);
+  if (QUALITIES.includes(r.lectorQuality as Quality)) quality = r.lectorQuality as Quality;
+  modelReady = r.modelReady === true;
   pageToggles.showOnPage = r.showOnPage !== false;
   pageToggles.followScroll = r.followScroll !== false;
   renderSwitches();
@@ -101,33 +108,59 @@ function fmtLeft(sec: number | null): string {
   return `${Math.max(1, Math.round(sec / 60))} min left`;
 }
 
-function showError(msg: string): void {
+/** "1 minute 42 seconds", for screen readers. */
+function spoken(sec: number): string {
+  const s = Math.max(0, Math.round(sec));
+  const m = Math.floor(s / 60);
+  const r = s % 60;
+  const parts: string[] = [];
+  if (m) parts.push(`${m} ${m === 1 ? 'minute' : 'minutes'}`);
+  if (r || !m) parts.push(`${r} ${r === 1 ? 'second' : 'seconds'}`);
+  return parts.join(' ');
+}
+
+/** The seek bar's spoken value: "1 minute 42 seconds of about 7 minutes". */
+function seekSpoken(elapsed: number, total: number | null): string {
+  if (total === null || total <= 0) return `${spoken(elapsed)} read`;
+  const rounded = total >= 90 ? spoken(Math.round(total / 60) * 60) : spoken(total);
+  return `${spoken(elapsed)} of about ${rounded}`;
+}
+
+/** Say something once, politely. Clears first so the same words can be said again later. */
+let announceTimer: ReturnType<typeof setTimeout> | undefined;
+function announce(message: string): void {
+  const el = $('sr-status');
+  el.textContent = '';
+  clearTimeout(announceTimer);
+  announceTimer = setTimeout(() => (el.textContent = message), 60);
+}
+
+function showError(msg: string, fromState = false): void {
   hasError = true;
+  errorFromState = fromState;
+  // The alert fires when the box appears with new words; polling must never rewrite it.
+  if (msg === lastError && !$('error').classList.contains('hidden')) return;
+  lastError = msg;
   $('error-text').textContent = msg;
   $('error').classList.remove('hidden');
   renderQuote();
-  if (errorTimer) clearTimeout(errorTimer);
-  errorTimer = setTimeout(clearError, 8000);
 }
 
 function clearError(): void {
   hasError = false;
+  errorFromState = false;
+  lastError = '';
   $('error').classList.add('hidden');
   renderQuote();
 }
+
+const IS_MAC = /Mac/i.test(navigator.userAgent);
 
 const ICON_PLAY = '<svg viewBox="0 0 24 24"><path d="M8 5v14l11-7z"/></svg>';
 const ICON_PAUSE = '<svg viewBox="0 0 24 24"><path d="M6 5h4v14H6zm8 0h4v14h-4z"/></svg>';
 const STAR_PATH = 'M12 17.3l-5.8 3.5 1.5-6.6L2.6 9.7l6.8-.6L12 3l2.6 6.1 6.8.6-5.1 4.5 1.5 6.6z';
 const ICON_STAR = `<svg viewBox="0 0 24 24"><path d="${STAR_PATH}"/></svg>`;
 const ICON_STAR_OUTLINE = `<svg viewBox="0 0 24 24" style="fill:none;stroke:currentColor;stroke-width:1.8;stroke-linejoin:round"><path d="${STAR_PATH}"/></svg>`;
-
-/** "Why we save articles | Longreads" → "Why we save articles" (keep the longest part). */
-function cleanTitle(title: string | undefined): string {
-  if (!title) return '';
-  const parts = title.split(/\s+[|–—·•]\s+|\s+-\s+/).map((p) => p.trim()).filter(Boolean);
-  return parts.length > 1 ? parts.reduce((a, b) => (b.length > a.length ? b : a)) : title.trim();
-}
 
 // ─── Toolbar icon follows the system theme ──────────────────────────────────
 
@@ -154,16 +187,23 @@ function renderVoiceCards(): void {
   $$('[data-voice-vibe]').forEach((el) => (el.textContent = v?.vibe ?? 'Tap to browse all voices'));
 }
 
+/** Built once, then updated in place: rebuilding would drop keyboard focus. */
 function renderSpeedRows(): void {
   $$('[data-speed-row]').forEach((row) => {
-    row.innerHTML = '';
-    for (const s of SPEEDS) {
-      const b = document.createElement('button');
-      b.className = 'speed-option' + (s === selectedSpeed ? ' selected' : '');
-      b.textContent = `${s}×`;
-      b.setAttribute('aria-pressed', String(s === selectedSpeed));
-      b.addEventListener('click', () => setSpeed(s));
-      row.appendChild(b);
+    if (!row.children.length) {
+      for (const s of SPEEDS) {
+        const b = document.createElement('button');
+        b.className = 'speed-option';
+        b.dataset.speed = String(s);
+        b.textContent = `${s}×`;
+        b.addEventListener('click', () => setSpeed(s));
+        row.appendChild(b);
+      }
+    }
+    for (const b of Array.from(row.children) as HTMLElement[]) {
+      const on = Number(b.dataset.speed) === selectedSpeed;
+      b.classList.toggle('selected', on);
+      b.setAttribute('aria-pressed', String(on));
     }
   });
 }
@@ -197,11 +237,16 @@ function renderVoiceTabs(): void {
   for (const t of TABS) {
     const b = document.createElement('button');
     b.className = 'tab' + (t.id === voiceTab ? ' selected' : '');
+    b.setAttribute('aria-pressed', String(t.id === voiceTab));
     b.textContent = t.label;
     b.addEventListener('click', () => {
       voiceTab = t.id;
-      renderVoiceTabs();
-      renderVoiceList();
+      for (const other of Array.from(tabs.children) as HTMLElement[]) {
+        const on = other === b;
+        other.classList.toggle('selected', on);
+        other.setAttribute('aria-pressed', String(on));
+      }
+      renderVoiceList({ announce: true });
     });
     tabs.appendChild(b);
   }
@@ -216,75 +261,91 @@ function voiceMatchesTab(v: Voice): boolean {
   }
 }
 
+const ICON_CHECK = '<svg class="check" viewBox="0 0 24 24" aria-hidden="true"><path d="M9.2 16.6L4.9 12.3l-1.4 1.4 5.7 5.7L20.5 8.1l-1.4-1.4z"/></svg>';
+
+/**
+ * One voice: a card holding three sibling buttons (choose, preview, favorite).
+ * Nothing interactive is nested, so each key press does exactly one thing.
+ */
 function buildVoiceRow(v: Voice): HTMLElement {
-  const row = document.createElement('div');
-  row.className = 'voice-row' + (v.id === selectedVoice ? ' selected' : '');
-  row.tabIndex = 0;
-  row.setAttribute('role', 'button');
+  const selected = v.id === selectedVoice;
+  const row = document.createElement('li');
+  row.className = 'voice-row' + (selected ? ' selected' : '');
+  row.dataset.voiceId = v.id;
 
-  const avatar = document.createElement('div');
-  avatar.className = 'avatar';
-  avatar.textContent = v.name[0];
-
-  const info = document.createElement('div');
-  info.className = 'info';
-  const name = document.createElement('div');
-  name.className = 'name';
-  name.textContent = v.name;
+  const choose = document.createElement('button');
+  choose.className = 'voice-choose';
+  choose.dataset.ctl = 'choose';
+  if (selected) choose.setAttribute('aria-current', 'true');
+  choose.innerHTML =
+    `<span class="avatar" aria-hidden="true"></span>` +
+    `<span class="info"><span class="name"></span><span class="vibe"></span></span>` +
+    (selected ? ICON_CHECK : '');
+  choose.querySelector('.avatar')!.textContent = v.name[0];
+  const name = choose.querySelector('.name')!;
+  name.append(v.name + ' ');
   const tag = document.createElement('span');
   tag.className = 'tag';
-  tag.textContent = `${v.region} ${v.gender}`;
+  tag.textContent = `${v.region} ${v.gender === 'F' ? 'female' : 'male'}`;
   name.appendChild(tag);
-  info.appendChild(name);
-  if (v.vibe) {
-    const vibe = document.createElement('div');
-    vibe.className = 'vibe';
-    vibe.textContent = v.vibe;
-    info.appendChild(vibe);
-  }
-
-  const preview = document.createElement('button');
-  preview.className = 'row-btn' + (previewingId === v.id ? ' previewing' : '');
-  preview.setAttribute('aria-label', `Preview ${v.name}`);
-  preview.innerHTML = ICON_PLAY;
-  preview.addEventListener('click', (e) => {
-    e.stopPropagation();
-    togglePreview(v.id);
-  });
-
-  const fav = document.createElement('button');
-  fav.className = 'row-btn fav' + (favorites.has(v.id) ? ' on' : '');
-  fav.setAttribute('aria-label', favorites.has(v.id) ? `Remove ${v.name} from favorites` : `Add ${v.name} to favorites`);
-  fav.innerHTML = favorites.has(v.id) ? ICON_STAR : ICON_STAR_OUTLINE;
-  fav.addEventListener('click', (e) => {
-    e.stopPropagation();
-    if (favorites.has(v.id)) favorites.delete(v.id);
-    else favorites.add(v.id);
-    savePrefs();
-    renderVoiceList();
-  });
-
-  const choose = () => {
+  const vibe = choose.querySelector<HTMLElement>('.vibe')!;
+  if (v.vibe) vibe.textContent = v.vibe;
+  else vibe.remove();
+  choose.addEventListener('click', () => {
     stopPreview();
     setVoice(v.id);
     closeSheet('voice-sheet');
-  };
-  row.addEventListener('click', choose);
-  row.addEventListener('keydown', (e) => {
-    if (e.key === 'Enter') choose();
   });
 
-  row.append(avatar, info, preview, fav);
+  const preview = document.createElement('button');
+  preview.className = 'row-btn preview' + (previewingId === v.id ? ' previewing' : '');
+  preview.dataset.ctl = 'preview';
+  preview.setAttribute('aria-label', `Preview ${v.name}`);
+  preview.setAttribute('aria-pressed', String(previewingId === v.id));
+  preview.innerHTML = ICON_PLAY;
+  preview.firstElementChild?.setAttribute('aria-hidden', 'true');
+  preview.addEventListener('click', () => togglePreview(v.id));
+
+  const fav = document.createElement('button');
+  fav.className = 'row-btn fav' + (favorites.has(v.id) ? ' on' : '');
+  fav.dataset.ctl = 'fav';
+  fav.setAttribute('aria-label', `Favorite ${v.name}`);
+  fav.setAttribute('aria-pressed', String(favorites.has(v.id)));
+  fav.innerHTML = favorites.has(v.id) ? ICON_STAR : ICON_STAR_OUTLINE;
+  fav.firstElementChild?.setAttribute('aria-hidden', 'true');
+  fav.addEventListener('click', () => {
+    if (favorites.has(v.id)) favorites.delete(v.id);
+    else favorites.add(v.id);
+    savePrefs();
+    // Favorites move to the top group, so the list is rebuilt; focus goes back to the same button.
+    renderVoiceList({ focus: { id: v.id, ctl: 'fav' } });
+  });
+
+  row.append(choose, preview, fav);
   return row;
 }
 
-function renderVoiceList(): void {
+let countTimer: ReturnType<typeof setTimeout> | undefined;
+
+/**
+ * Rebuilds the list. `focus` puts keyboard focus back on a control of the same
+ * voice afterwards; `announce` says how many voices match (after the user
+ * searched or switched tab, never on open).
+ */
+function renderVoiceList(opts: { focus?: { id: string; ctl: string }; announce?: boolean } = {}): void {
   const list = $('voice-list');
   list.innerHTML = '';
   const q = $<HTMLInputElement>('voice-search').value.trim().toLowerCase();
   const matches = VOICES.filter(
     (v) => voiceMatchesTab(v) && (!q || `${v.name} ${v.region} ${v.lang} ${v.vibe ?? ''}`.toLowerCase().includes(q))
   );
+
+  if (opts.announce) {
+    clearTimeout(countTimer);
+    countTimer = setTimeout(() => {
+      $('voice-count').textContent = matches.length === 1 ? '1 voice' : matches.length ? `${matches.length} voices` : 'No voices match';
+    }, 400);
+  }
 
   if (!matches.length) {
     const empty = document.createElement('div');
@@ -296,18 +357,34 @@ function renderVoiceList(): void {
 
   const favs = voiceTab === 'favorites' ? [] : matches.filter((v) => favorites.has(v.id));
   const rest = matches.filter((v) => !favs.includes(v));
-  const group = (label: string, voices: Voice[]) => {
+  const group = (label: string, voices: Voice[], id: string) => {
     if (!voices.length) return;
     if (favs.length) {
-      const g = document.createElement('div');
+      const g = document.createElement('h3');
       g.className = 'group-label';
+      g.id = id;
       g.textContent = label;
       list.appendChild(g);
     }
-    voices.forEach((v) => list.appendChild(buildVoiceRow(v)));
+    const ul = document.createElement('ul');
+    ul.className = 'voice-list';
+    if (favs.length) ul.setAttribute('aria-labelledby', id);
+    else ul.setAttribute('aria-label', voiceTab === 'favorites' ? 'Favorite voices' : 'Voices');
+    voices.forEach((v) => ul.appendChild(buildVoiceRow(v)));
+    list.appendChild(ul);
   };
-  group('Favorites', favs);
-  group('All voices', rest);
+  group('Favorites', favs, 'grp-favs');
+  group('All voices', rest, 'grp-all');
+
+  if (opts.focus) {
+    const target = list.querySelector<HTMLElement>(`[data-voice-id="${opts.focus.id}"] [data-ctl="${opts.focus.ctl}"]`);
+    // The voice left this view (un-favorited on the Favorites tab): land on the nearest control instead.
+    (target ?? list.querySelector<HTMLElement>('[data-ctl="choose"]') ?? $('voice-search')).focus();
+  }
+}
+
+function sheetIsOpen(): boolean {
+  return !$('voice-sheet').classList.contains('hidden') || !$('settings-sheet').classList.contains('hidden');
 }
 
 function openSheet(id: 'voice-sheet' | 'settings-sheet'): void {
@@ -319,7 +396,9 @@ function openSheet(id: 'voice-sheet' | 'settings-sheet'): void {
     renderVoiceList();
     $('voice-search').focus();
   } else {
-    $('close-settings').focus();
+    renderQualityDesc();
+    renderShortcuts();
+    $('settings-title').focus(); // read the title first, then Tab into the controls
   }
 }
 
@@ -329,33 +408,57 @@ function closeSheet(id: 'voice-sheet' | 'settings-sheet'): void {
   if (id === 'voice-sheet') stopPreview();
   if (!wasOpen) return;
   $('main').inert = false;
-  sheetOpener?.focus();
+  const opener = sheetOpener;
+  sheetOpener = null;
+  // Next tick, so the Enter that chose a voice cannot also re-press the button it returns to.
+  setTimeout(() => {
+    const back = opener && opener.isConnected && !opener.closest('.hidden') ? opener : primaryControl();
+    back?.focus();
+  }, 0);
 }
 
 // ─── Previews (bundled MP3s: instant, no model needed) ─────────────────────
+// A preview pauses the reading underneath it (two voices at once is noise) and
+// the reading resumes when the preview ends or the sheet closes.
 
-function stopPreview(): void {
+function syncPreviewButtons(): void {
+  $$('#voice-list [data-voice-id]').forEach((row) => {
+    const on = row.dataset.voiceId === previewingId;
+    const b = row.querySelector<HTMLElement>('[data-ctl="preview"]');
+    b?.classList.toggle('previewing', on);
+    b?.setAttribute('aria-pressed', String(on));
+  });
+}
+
+function stopPreview(keepPaused = false): void {
   previewAudio?.pause();
   previewAudio = null;
   previewingId = null;
+  syncPreviewButtons();
+  if (pausedForPreview && !keepPaused) {
+    pausedForPreview = false;
+    if (state.status === 'paused') void sendCommand({ cmd: 'resume' });
+  }
 }
 
 function togglePreview(id: string): void {
   const same = previewingId === id;
-  stopPreview();
-  if (!same) {
-    previewingId = id;
-    const audio = new Audio(chrome.runtime.getURL(`previews/${id}.mp3`));
-    const done = () => {
-      if (previewAudio === audio) stopPreview();
-      renderVoiceList();
-    };
-    audio.onended = done;
-    audio.onerror = done;
-    audio.play().catch(done);
-    previewAudio = audio;
+  stopPreview(!same);
+  if (same) return;
+  if (!pausedForPreview && (state.status === 'playing' || state.status === 'buffering')) {
+    pausedForPreview = true;
+    void sendCommand({ cmd: 'pause' });
   }
-  renderVoiceList();
+  previewingId = id;
+  const audio = new Audio(chrome.runtime.getURL(`previews/${id}.mp3`));
+  const done = () => {
+    if (previewAudio === audio) stopPreview();
+  };
+  audio.onended = done;
+  audio.onerror = done;
+  audio.play().catch(done);
+  previewAudio = audio;
+  syncPreviewButtons();
 }
 
 // ─── Ink-in: the sentence being read turns to ink word by word ──────────────
@@ -491,10 +594,27 @@ function ensureInkLoop(): void {
 
 // ─── Rendering player state ─────────────────────────────────────────────────
 
+/**
+ * What a screen reader is told, one sentence per CHANGE of phase. Nothing else
+ * is announced: no percents, no minutes, no buffering blips.
+ */
+type Phase = 'idle' | 'preparing' | 'reading' | 'paused' | 'error';
+let phase: Phase | null = null; // null until the first state: what was already true when the popup opened is not news
+let lastProgress = 0;
+let lastView: 'idle' | 'player' | null = null;
+let controlsLive = false;
+let loadTimer: ReturnType<typeof setTimeout> | undefined;
+let loadAnnounced = false;
+let seekA11yAt = 0;
+/** While the seek bar has keyboard focus its spoken value refreshes at most this often. */
+const SEEK_FOCUSED_REFRESH_MS = 15000;
+const SEEK_KEY_SEC = 10;
+
 function applyState(next: PlayerState): void {
   trackProgress(next);
   state = next;
   if (next.status !== 'idle') starting = false;
+  if (next.status === 'playing') modelReady = true;
   render();
 }
 
@@ -505,6 +625,8 @@ function renderQuote(): void {
   q.classList.toggle('paused', state.status === 'paused' && !hasError);
   q.classList.toggle('error', hasError || state.status === 'error');
 }
+
+const isNonEnglish = (lang: string | undefined): boolean => !!lang && !/^(en|und)([-_]|$)/i.test(lang);
 
 interface StatusLine { text: string; extra: string; sub: string; shimmer: boolean }
 
@@ -535,17 +657,93 @@ function statusLine(s: PlayerState): StatusLine {
     line.text = 'Preparing this page';
     line.shimmer = true;
   }
+  if (!line.sub && isNonEnglish(s.lang)) line.sub = "This page isn't in English. Lector's voices only read English well.";
   return line;
+}
+
+function phaseOf(s: PlayerState): Phase {
+  switch (s.status) {
+    case 'error': return 'error';
+    case 'paused': return 'paused';
+    case 'playing': return 'reading';
+    case 'buffering': return phase === 'preparing' ? 'preparing' : 'reading';
+    case 'starting':
+    case 'loading': return 'preparing';
+    default: return starting ? 'preparing' : 'idle';
+  }
+}
+
+function trackPhase(s: PlayerState): void {
+  const next = phaseOf(s);
+  const prev = phase;
+  phase = next;
+  if (s.status !== 'idle') lastProgress = s.progress;
+  if (prev === null || prev === next) return;
+  if (next === 'reading' && prev !== 'error') announce('Reading');
+  else if (next === 'paused') {
+    announce(s.recoverable ? 'Paused. Press play to continue.' : s.totalParas ? `Paused. Section ${s.paraIndex + 1} of ${s.totalParas}` : 'Paused');
+  } else if (next === 'idle' && prev !== 'error') announce(lastProgress > 0.97 ? 'Finished' : 'Stopped');
+  // 'preparing' is read when focus lands on the status line; 'error' by role=alert.
+}
+
+/** The first download takes minutes: say so once, and only if it is not just loading from disk. */
+function trackLoading(s: PlayerState): void {
+  if (s.status === 'loading') {
+    if (loadTimer || loadAnnounced) return;
+    loadTimer = setTimeout(() => {
+      loadTimer = undefined;
+      if (state.status !== 'loading') return;
+      loadAnnounced = true;
+      announce(modelReady ? 'Starting the voice.' : 'Downloading the voice. One time only.');
+    }, 1500);
+  } else {
+    clearTimeout(loadTimer);
+    loadTimer = undefined;
+    loadAnnounced = false;
+  }
+}
+
+/** Where keyboard focus belongs for the view that is showing. */
+function primaryControl(): HTMLElement | null {
+  if (!$('idle-view').classList.contains('hidden')) return $('btn-start');
+  return controlsLive ? $('btn-play') : $('status-line');
+}
+
+/**
+ * Views swap by hiding one and showing the other, which drops focus to <body>.
+ * When the view changes (or the controls first appear) put focus where the user
+ * would want it; otherwise leave it alone, even if they clicked on nothing.
+ */
+function settleFocus(view: 'idle' | 'player'): void {
+  const first = lastView === null;
+  const changed = view !== lastView || (controlsLive && !wasLive);
+  lastView = view;
+  wasLive = controlsLive;
+  if ((!changed && !first) || sheetIsOpen()) return;
+  const a = document.activeElement as (HTMLElement & { checkVisibility?: (o?: unknown) => boolean }) | null;
+  const lost = !a || a === document.body || !!a.closest('.hidden') || a.checkVisibility?.({ visibilityProperty: true }) === false;
+  if (lost) primaryControl()?.focus();
+  else if (a === $('status-line') && controlsLive) $('btn-play').focus();
+}
+let wasLive = false;
+
+function setLang(id: string, lang: string | undefined): void {
+  const el = $(id);
+  if (lang) el.setAttribute('lang', lang);
+  else el.removeAttribute('lang');
 }
 
 function render(): void {
   const s = state;
   const inSession = starting || ['starting', 'loading', 'buffering', 'playing', 'paused'].includes(s.status);
+  trackPhase(s);
+  trackLoading(s);
 
   $('idle-view').classList.toggle('hidden', inSession);
   $('player-view').classList.toggle('hidden', !inSession);
 
-  if (s.status === 'error' && s.error) showError(s.error);
+  if (s.status === 'error' && s.error) showError(s.error, true);
+  else if (errorFromState) clearError();
   renderQuote();
 
   // Keep the pickers in sync with the live session
@@ -558,14 +756,24 @@ function render(): void {
     renderSpeedRows();
   }
 
-  const engine = $('engine-note');
-  engine.textContent = s.device
-    ? s.device === 'webgpu' ? 'Running on your GPU (fastest)' : 'Running on your CPU'
-    : 'Not started yet';
+  setText('engine-note', engineNote(s));
 
-  if (!inSession) return;
+  const loading = s.status === 'loading';
+  controlsLive = inSession && !loading && ['playing', 'paused', 'buffering'].includes(s.status);
+  if (inSession) renderPlayer(s, loading);
+  settleFocus(inSession ? 'player' : 'idle');
+}
 
+function engineNote(s: PlayerState): string {
+  if (s.device === 'webgpu') return 'Running on your graphics chip';
+  if (s.device === 'wasm') return s.threads && s.threads > 1 ? `Running on your processor, ${s.threads} threads` : 'Running on your processor';
+  return 'Not started yet';
+}
+
+function renderPlayer(s: PlayerState, loading: boolean): void {
   $('player-title').textContent = s.title || $('page-title').textContent;
+  setLang('player-title', s.lang);
+  setLang('sentence', s.lang);
 
   const line = statusLine(s);
   setText('status-text', line.text);
@@ -574,13 +782,10 @@ function render(): void {
   setText('status-sub', line.sub);
   $('status-sub').classList.toggle('hidden', !line.sub);
 
-  const loading = s.status === 'loading';
   $('load-block').classList.toggle('hidden', !loading);
   $('play-block').classList.toggle('hidden', loading);
   if (loading) {
-    const pct = Math.round(s.loadProgress * 100);
-    $('load-fill').style.width = `${pct}%`;
-    $('load-bar').setAttribute('aria-valuenow', String(pct));
+    $('load-fill').style.width = `${Math.round(s.loadProgress * 100)}%`;
     return;
   }
 
@@ -588,26 +793,185 @@ function render(): void {
   ensureInkLoop();
 
   const playing = s.status === 'playing' || s.status === 'buffering';
-  $('btn-play').innerHTML = playing ? ICON_PAUSE : ICON_PLAY;
+  setHtml('btn-play', playing ? ICON_PAUSE : ICON_PLAY);
   $('btn-play').setAttribute('aria-label', playing ? 'Pause' : 'Play');
   $('seek-wrap').classList.toggle('playing', s.status === 'playing');
   // While preparing there is nothing to seek or control yet; hide without shifting layout
-  const live = ['playing', 'paused', 'buffering'].includes(s.status);
-  $('seek-wrap').style.visibility = $('controls').style.visibility = live ? '' : 'hidden';
+  $('seek-wrap').style.visibility = $('controls').style.visibility = controlsLive ? '' : 'hidden';
 
-  if (!seeking) {
-    const seek = $<HTMLInputElement>('seek');
-    seek.value = String(Math.round(s.progress * 1000));
-    seek.style.setProperty('--fill', `${s.progress * 100}%`);
-  }
-  $('t-elapsed').textContent = fmtTime(s.elapsed);
-  $('t-remaining').textContent = fmtLeft(s.remaining);
+  if (!seeking) updateSeek(s, false);
+  setText('t-elapsed', fmtTime(s.elapsed));
+  setText('t-remaining', fmtLeft(s.remaining));
 }
 
-/** Only touch the DOM when text changes (keeps the live region quiet). */
+/**
+ * The bar fills continuously, but its value (which a screen reader speaks)
+ * moves only when the bar is not focused, or every 15s if it is, so sitting on
+ * it is not a stream of announcements.
+ */
+function updateSeek(s: PlayerState, force: boolean): void {
+  const seek = $<HTMLInputElement>('seek');
+  seek.style.setProperty('--fill', `${s.progress * 100}%`);
+  const now = Date.now();
+  if (!force && document.activeElement === seek && now - seekA11yAt < SEEK_FOCUSED_REFRESH_MS) return;
+  const value = String(Math.round(s.progress * 1000));
+  if (seek.value !== value) seek.value = value;
+  const text = seekSpoken(s.elapsed, s.remaining === null ? null : s.elapsed + s.remaining);
+  if (seek.getAttribute('aria-valuetext') !== text) seek.setAttribute('aria-valuetext', text);
+  seekA11yAt = now;
+}
+
+/** Only touch the DOM when text changes. */
 function setText(id: string, text: string): void {
   const el = $(id);
   if (el.textContent !== text) el.textContent = text;
+}
+
+function setHtml(id: string, html: string): void {
+  const el = $(id);
+  if (el.dataset.html !== html) {
+    el.dataset.html = html;
+    el.innerHTML = html;
+  }
+}
+
+// ─── Seek bar: a pointer drag commits on release, the keyboard on a pause in typing ──
+
+let seekCommit: ReturnType<typeof setTimeout> | undefined;
+let seekTarget = 0;
+let committing = false;
+
+async function commitSeek(progress: number): Promise<void> {
+  committing = true;
+  seeking = true;
+  await sendCommand({ cmd: 'seek', progress });
+  committing = false;
+  seeking = false;
+}
+
+function flushSeek(): void {
+  if (seekCommit === undefined) return;
+  clearTimeout(seekCommit);
+  seekCommit = undefined;
+  void commitSeek(seekTarget);
+}
+
+/** Show a pending seek position (bar, times, spoken value) before it is sent. */
+function showSeekAt(progress: number): void {
+  const seek = $<HTMLInputElement>('seek');
+  const total = state.remaining === null ? null : state.elapsed + state.remaining;
+  seek.value = String(Math.round(progress * 1000));
+  seek.style.setProperty('--fill', `${progress * 100}%`);
+  const elapsed = total === null ? state.elapsed : progress * total;
+  seek.setAttribute('aria-valuetext', seekSpoken(elapsed, total));
+  setText('t-elapsed', fmtTime(elapsed));
+  seekA11yAt = Date.now();
+}
+
+function onSeekKey(e: KeyboardEvent): void {
+  if (e.altKey || e.ctrlKey || e.metaKey) return;
+  const total = state.remaining === null ? null : state.elapsed + state.remaining;
+  const step = total && total > 0 ? SEEK_KEY_SEC / total : 0.02;
+  const base = seekCommit !== undefined ? seekTarget : state.progress;
+  const nudge = (target: number) => {
+    seeking = true;
+    seekTarget = Math.max(0, Math.min(1, target));
+    showSeekAt(seekTarget);
+    clearTimeout(seekCommit);
+    seekCommit = setTimeout(() => {
+      seekCommit = undefined;
+      void commitSeek(seekTarget);
+    }, 450);
+  };
+  switch (e.key) {
+    case 'ArrowRight':
+    case 'ArrowUp': nudge(base + step); break;
+    case 'ArrowLeft':
+    case 'ArrowDown': nudge(base - step); break;
+    case 'Home': nudge(0); break;
+    case 'End': nudge(1); break;
+    case 'PageUp': void sendCommand({ cmd: 'prev' }); break;
+    case 'PageDown': void sendCommand({ cmd: 'next' }); break;
+    default: return;
+  }
+  e.preventDefault();
+  e.stopPropagation();
+}
+
+// ─── Settings ───────────────────────────────────────────────────────────────
+
+const QUALITY_COPY: Record<Quality, string> = {
+  auto: 'Picks the best option for this computer.',
+  small: 'Uses a smaller voice model, about 90MB instead of about 300MB. On slower computers it may pause between sentences.',
+  smooth: 'Uses the larger model and the faster path whenever possible.',
+};
+
+function renderQualityDesc(): void {
+  $$('#quality-seg input').forEach((el) => ((el as HTMLInputElement).checked = (el as HTMLInputElement).value === quality));
+  $('quality-desc').textContent = QUALITY_COPY[quality];
+}
+
+const SHORTCUT_ROWS: [command: string, label: string][] = [
+  ['read-article', 'Start or pause'],
+  ['listen-from-here', 'Listen from here'],
+  ['next-paragraph', 'Next paragraph'],
+  ['prev-paragraph', 'Previous paragraph'],
+  ['stop', 'Stop'],
+  ['speed-up', 'Faster'],
+  ['speed-down', 'Slower'],
+];
+const KEY_NAMES: Record<string, string> = { Period: '.', Comma: ',', Left: '←', Right: '→', Up: '↑', Down: '↓' };
+let shortcuts: Record<string, string> = {};
+
+async function loadShortcuts(): Promise<void> {
+  try {
+    const all = await chrome.commands.getAll();
+    shortcuts = Object.fromEntries(all.map((c) => [c.name ?? '', c.shortcut ?? '']));
+  } catch {
+    shortcuts = {};
+  }
+  renderShortcuts();
+}
+
+function keyNames(shortcut: string): string[] {
+  const parts = shortcut.includes('+') ? shortcut.split('+') : [shortcut];
+  return parts.map((p) => (IS_MAC && p === 'Alt' ? 'Option' : KEY_NAMES[p] ?? p));
+}
+
+function keyCaps(shortcut: string): HTMLElement {
+  const wrap = document.createElement('span');
+  wrap.className = 'sc-keys';
+  if (!shortcut) {
+    wrap.classList.add('sc-none');
+    wrap.textContent = 'Not set';
+    return wrap;
+  }
+  for (const name of keyNames(shortcut)) {
+    const k = document.createElement('kbd');
+    k.textContent = name;
+    wrap.appendChild(k);
+  }
+  return wrap;
+}
+
+/** Shortcuts shown are the ones Chrome actually has bound, so a remapped key never lies. */
+function renderShortcuts(): void {
+  $('shortcut-list').replaceChildren(
+    ...SHORTCUT_ROWS.map(([cmd, label]) => {
+      const li = document.createElement('li');
+      const name = document.createElement('span');
+      name.className = 'sc-name';
+      name.textContent = label;
+      li.append(name, keyCaps(shortcuts[cmd] ?? ''));
+      return li;
+    })
+  );
+  const read = shortcuts['read-article'] ?? '';
+  $('tip-read').classList.toggle('hidden', !read);
+  $('tip-read-keys').replaceChildren(...(read ? Array.from(keyCaps(read).children).flatMap((k, i) => (i ? [' ', k] : [k])) : []));
+  $('sr-tip').textContent = read
+    ? `Using a screen reader? Press ${keyNames(read).join('+')} to pause Lector while your screen reader speaks.`
+    : '';
 }
 
 // ─── Actions ────────────────────────────────────────────────────────────────
@@ -620,7 +984,7 @@ async function startReading(): Promise<void> {
   const res = await request<{ ok?: boolean; error?: string }>({ type: 'VB_START', mode: 'article' });
   if (!res || res.error) {
     starting = false;
-    showError(res?.error ?? 'Could not start. Try refreshing the page.');
+    showError(res?.error ?? 'Lector could not start. Try refreshing the page.');
     render();
     return;
   }
@@ -644,6 +1008,8 @@ async function init(): Promise<void> {
   renderVoiceCards();
   renderSpeedRows();
   bindSwitches();
+  renderQualityDesc();
+  void loadShortcuts();
 
   chrome.tabs.query({ active: true, currentWindow: true }, (tabs) => {
     $('page-title').textContent = cleanTitle(tabs[0]?.title) || 'This page';
@@ -661,7 +1027,7 @@ async function init(): Promise<void> {
   $('close-voices').addEventListener('click', () => closeSheet('voice-sheet'));
   $('btn-settings').addEventListener('click', () => openSheet('settings-sheet'));
   $('close-settings').addEventListener('click', () => closeSheet('settings-sheet'));
-  $('voice-search').addEventListener('input', renderVoiceList);
+  $('voice-search').addEventListener('input', () => renderVoiceList({ announce: true }));
 
   $('btn-clear-cache').addEventListener('click', async () => {
     const res = await request<{ cleared?: number }>({ type: 'VB_CLEAR_CACHE' });
@@ -670,13 +1036,34 @@ async function init(): Promise<void> {
       : 'Nothing to clear.';
   });
 
+  $('btn-shortcuts').addEventListener('click', () => {
+    void chrome.tabs.create({ url: 'chrome://extensions/shortcuts' });
+  });
+
+  $$('#quality-seg input').forEach((el) =>
+    el.addEventListener('change', () => {
+      const value = (el as HTMLInputElement).value as Quality;
+      if (!QUALITIES.includes(value)) return;
+      quality = value;
+      void chrome.storage.local.set({ lectorQuality: quality });
+      renderQualityDesc();
+    })
+  );
+
   const seek = $<HTMLInputElement>('seek');
   seek.addEventListener('pointerdown', () => (seeking = true));
-  seek.addEventListener('input', () => seek.style.setProperty('--fill', `${Number(seek.value) / 10}%`));
-  seek.addEventListener('change', () => {
-    seeking = false;
-    void sendCommand({ cmd: 'seek', progress: Number(seek.value) / 1000 });
+  seek.addEventListener('input', () => showSeekAt(Number(seek.value) / 1000));
+  seek.addEventListener('change', () => void commitSeek(Number(seek.value) / 1000));
+  for (const t of ['pointerup', 'pointercancel']) {
+    // A click that did not move the bar must not leave it frozen.
+    seek.addEventListener(t, () => setTimeout(() => { if (!committing && seekCommit === undefined) seeking = false; }, 100));
+  }
+  seek.addEventListener('blur', () => {
+    if (seekCommit !== undefined) flushSeek();
+    else if (!committing) seeking = false;
   });
+  seek.addEventListener('focus', () => updateSeek(state, true));
+  seek.addEventListener('keydown', onSeekKey);
 
   document.addEventListener('keydown', (e) => {
     if (e.key === 'Escape') {
@@ -684,15 +1071,18 @@ async function init(): Promise<void> {
       closeSheet('settings-sheet');
       return;
     }
+    if ($('main').inert || e.altKey || e.ctrlKey || e.metaKey) return; // a sheet is open, or not ours
     const target = e.target as HTMLElement;
+    // Fields and the seek bar keep their own keys (the seek bar handles arrows itself).
+    if (target.tagName === 'TEXTAREA' || target.tagName === 'SELECT') return;
     if (target.tagName === 'INPUT' && (target as HTMLInputElement).type !== 'range') return;
     if (state.status === 'idle') return;
     if (e.key === ' ' && target.tagName !== 'BUTTON') {
       e.preventDefault();
       togglePlay();
-    } else if (e.key === 'ArrowRight' && target.tagName !== 'INPUT') {
+    } else if (target.tagName !== 'INPUT' && e.key === 'ArrowRight') {
       void sendCommand({ cmd: 'next' });
-    } else if (e.key === 'ArrowLeft' && target.tagName !== 'INPUT') {
+    } else if (target.tagName !== 'INPUT' && e.key === 'ArrowLeft') {
       void sendCommand({ cmd: 'prev' });
     }
   });

@@ -11,9 +11,10 @@ import type {
   OffscreenEvent,
   OffscreenRequest,
   PlayerState,
+  Quality,
   StoredSession,
 } from '../shared/protocol';
-import { IDLE_STATE } from '../shared/protocol';
+import { IDLE_STATE, QUALITIES, SPEEDS } from '../shared/protocol';
 import { DEFAULT_VOICE, findVoice } from '../shared/voices';
 
 const OFFSCREEN_URL = 'offscreen/offscreen.html';
@@ -21,6 +22,9 @@ const IDLE_CLOSE_ALARM = 'vb-close-offscreen';
 const IDLE_CLOSE_MINUTES = 5;
 
 class UserFacingError extends Error {}
+const GENERIC_ERROR = 'Lector hit a problem. Please try again.';
+/** True once audio has played this session (so a later "buffering" reads as Reading, not Preparing). */
+let heardAudio = false;
 
 // ─── Offscreen document ─────────────────────────────────────────────────────
 
@@ -72,7 +76,7 @@ async function ensureOffscreen(): Promise<void> {
       if (await hasOffscreen()) await chrome.offscreen.closeDocument();
       await createOffscreen();
       if (!(await pingOffscreen(8000))) {
-        throw new UserFacingError('The audio engine did not start. Please reload the extension and try again.');
+        throw new UserFacingError('Lector could not start. Reload the extension from the puzzle-piece menu, then try again.');
       }
     } finally {
       creating = null;
@@ -87,9 +91,10 @@ async function closeOffscreen(): Promise<void> {
 
 // ─── Prefs & session persistence ────────────────────────────────────────────
 
-async function getPrefs(): Promise<{ voice: string; speed: number }> {
-  const r = await chrome.storage.local.get(['defaultVoice', 'defaultSpeed']);
+async function getPrefs(): Promise<{ voice: string; speed: number; quality: Quality }> {
+  const r = await chrome.storage.local.get(['defaultVoice', 'defaultSpeed', 'lectorQuality']);
   return {
+    quality: QUALITIES.includes(r.lectorQuality as Quality) ? (r.lectorQuality as Quality) : 'auto',
     // Ignore saved voices we no longer offer (e.g. from before v0.2.1).
     voice: typeof r.defaultVoice === 'string' && findVoice(r.defaultVoice) ? r.defaultVoice : DEFAULT_VOICE,
     speed: typeof r.defaultSpeed === 'number' && r.defaultSpeed > 0 ? r.defaultSpeed : 1,
@@ -141,7 +146,9 @@ type StartMode = 'article' | 'selection' | 'fromSelection';
 
 async function startReading(mode: StartMode, tabIdArg?: number): Promise<void> {
   const tabId = tabIdArg ?? (await activeTabId());
+  heardAudio = false;
   setBadge('…');
+  setTitle('Preparing this page');
   try {
     await ensureContentScript(tabId);
     const article = await contentCall<Article | null>(tabId, { type: 'EXTRACT_ARTICLE', mode });
@@ -160,12 +167,12 @@ async function startReading(mode: StartMode, tabIdArg?: number): Promise<void> {
 }
 
 async function launch(article: Article, tabId: number): Promise<void> {
-  const { voice, speed } = await getPrefs();
+  const { voice, speed, quality } = await getPrefs();
   await ensureOffscreen();
   // Saved only once the offscreen document exists: a session with no document
   // is what getState() reports as "recoverable", which would flash "Paused".
   await saveSession({ article, tabId, paraIndex: article.startParagraph });
-  await sendToOffscreen({ target: 'offscreen', type: 'TTS_START', article, voice, speed });
+  await sendToOffscreen({ target: 'offscreen', type: 'TTS_START', article, voice, speed, quality });
 }
 
 /** The offscreen doc died (Chrome closes it after 30s without audio): restart from where we were. */
@@ -208,6 +215,15 @@ async function toggleFromShortcut(): Promise<void> {
   await startReading('article').catch(() => {});
 }
 
+/** Faster or slower by one step of the speed row, from the shortcut keys. */
+async function stepSpeed(dir: 1 | -1): Promise<void> {
+  const state = await getState();
+  const current = state.status !== 'idle' ? state.speed : (await getPrefs()).speed;
+  const i = SPEEDS.reduce((best, s, k) => (Math.abs(s - current) < Math.abs(SPEEDS[best] - current) ? k : best), 0);
+  const next = SPEEDS[Math.max(0, Math.min(SPEEDS.length - 1, i + dir))];
+  if (next !== current) await runCommand({ cmd: 'speed', speed: next });
+}
+
 async function getState(): Promise<PlayerState> {
   if (await hasOffscreen()) {
     try {
@@ -244,15 +260,25 @@ function setBadge(text: string, color = BADGE_INK): void {
   void chrome.action.setBadgeText({ text });
 }
 
-function flashError(e: unknown): void {
-  const message = e instanceof UserFacingError ? e.message : 'Something went wrong. Please try again.';
-  console.error('[Lector bg]', e);
+const TITLE = 'Lector';
+
+/**
+ * The toolbar button's tooltip doubles as its accessible name, so it says the
+ * state in words ("Lector — Reading"); the badge is the same thing for eyes.
+ */
+function setTitle(state?: string): void {
+  void chrome.action.setTitle({ title: state ? `${TITLE} — ${state}` : TITLE });
+}
+
+/** Errors stay on the toolbar until the next action: nobody should have to catch them in 6 seconds. */
+function showToolbarError(message: string): void {
   setBadge('!', BADGE_ERROR);
-  void chrome.action.setTitle({ title: message });
-  setTimeout(() => {
-    setBadge('');
-    void chrome.action.setTitle({ title: 'Lector' });
-  }, 6000);
+  setTitle(`Couldn't read this page: ${message}`);
+}
+
+function flashError(e: unknown): void {
+  console.error('[Lector bg]', e);
+  showToolbarError(e instanceof UserFacingError ? e.message : GENERIC_ERROR);
 }
 
 // ─── Offscreen events ───────────────────────────────────────────────────────
@@ -260,6 +286,18 @@ function flashError(e: unknown): void {
 let eventChain: Promise<void> = Promise.resolve();
 
 async function onOffscreenEvent(event: OffscreenEvent): Promise<void> {
+  if (event.kind === 'progress') {
+    const pct = Math.min(100, Math.round(event.fraction * 100));
+    if (event.fraction >= 1) {
+      setBadge('…');
+      setTitle('Starting the voice');
+    } else {
+      setBadge(`${pct}%`);
+      setTitle(`Downloading voice ${pct}%`);
+    }
+    return;
+  }
+
   const session = await loadSession();
 
   if (event.kind === 'segment') {
@@ -291,30 +329,60 @@ async function onOffscreenEvent(event: OffscreenEvent): Promise<void> {
       await endSession(session);
       break;
     case 'playing':
+      heardAudio = true;
       setBadge('');
+      setTitle('Reading');
       await chrome.alarms.clear(IDLE_CLOSE_ALARM);
       await chrome.storage.local.set({ modelReady: true });
       break;
     case 'loading':
+    case 'starting':
+      setBadge('…');
+      setTitle('Preparing this page');
+      break;
     case 'buffering':
       setBadge('…');
+      setTitle(heardAudio ? 'Reading' : 'Preparing this page');
       break;
     case 'paused':
       setBadge('❚❚');
+      setTitle('Paused');
       break;
     case 'error':
-      setBadge('!', BADGE_ERROR);
+      showToolbarError(event.error ?? GENERIC_ERROR);
       break;
   }
 }
 
 async function endSession(session: StoredSession | null): Promise<void> {
+  heardAudio = false;
   setBadge('');
+  setTitle();
   await saveSession(null);
   if (session) contentCall(session.tabId, { type: 'VB_HIGHLIGHT_CLEAR' }).catch(() => {});
+  if (qualityDirty) {
+    // The voice quality setting changed during this session: let the engine go so the next listen picks it up.
+    qualityDirty = false;
+    await closeOffscreen().catch(() => {});
+    return;
+  }
   // Keep the model warm for a few minutes so the next read starts instantly.
   await chrome.alarms.create(IDLE_CLOSE_ALARM, { delayInMinutes: IDLE_CLOSE_MINUTES });
 }
+
+/**
+ * The Voice quality setting is read when the engine loads. A loaded engine would keep the old
+ * choice for as long as the offscreen document lives, so drop it as soon as nothing is playing.
+ */
+let qualityDirty = false;
+chrome.storage.onChanged.addListener((changes, area) => {
+  if (area !== 'local' || !changes.lectorQuality) return;
+  void (async () => {
+    const state = await getState().catch(() => IDLE_STATE);
+    if (state.status === 'idle' || state.status === 'error') await closeOffscreen().catch(() => {});
+    else qualityDirty = true;
+  })();
+});
 
 chrome.alarms.onAlarm.addListener(async (alarm) => {
   if (alarm.name !== IDLE_CLOSE_ALARM) return;
@@ -356,7 +424,7 @@ chrome.runtime.onMessage.addListener((raw: unknown, _sender, sendResponse) => {
           const { modelReady } = await chrome.storage.local.get('modelReady');
           if (modelReady && (await getState()).status === 'idle') {
             await ensureOffscreen();
-            await sendToOffscreen({ target: 'offscreen', type: 'TTS_WARM' });
+            await sendToOffscreen({ target: 'offscreen', type: 'TTS_WARM', quality: (await getPrefs()).quality });
             await chrome.alarms.create(IDLE_CLOSE_ALARM, { delayInMinutes: IDLE_CLOSE_MINUTES });
           }
           sendResponse({ ok: true });
@@ -381,7 +449,7 @@ chrome.runtime.onMessage.addListener((raw: unknown, _sender, sendResponse) => {
       }
     } catch (e) {
       sendResponse({
-        error: e instanceof UserFacingError ? e.message : 'Something went wrong. Please try again.',
+        error: e instanceof UserFacingError ? e.message : GENERIC_ERROR,
       });
     }
   })();
@@ -394,6 +462,10 @@ chrome.commands.onCommand.addListener((command) => {
   if (command === 'read-article') void toggleFromShortcut();
   else if (command === 'next-paragraph') void runCommand({ cmd: 'next' });
   else if (command === 'prev-paragraph') void runCommand({ cmd: 'prev' });
+  else if (command === 'listen-from-here') void startReading('fromSelection').catch(() => {});
+  else if (command === 'stop') void runCommand({ cmd: 'stop' });
+  else if (command === 'speed-up') void stepSpeed(1);
+  else if (command === 'speed-down') void stepSpeed(-1);
 });
 
 const MENU_FROM_HERE = 'vb-from-here';

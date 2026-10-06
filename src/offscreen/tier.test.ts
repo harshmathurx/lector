@@ -26,4 +26,17 @@ describe('chooseTier', () => {
     expect(chooseTier({ ...base, gpu: true, gpuSlowBefore: true, cores: 4 })).toMatchObject({ device: 'webgpu' });
     expect(chooseTier({ ...base, gpu: true, gpuSlowBefore: true, isolated: false })).toMatchObject({ device: 'webgpu' });
   });
+  test('small: always the q8 model on the CPU, even with a GPU', () => {
+    expect(chooseTier({ ...base, gpu: true }, 'small')).toMatchObject({ device: 'wasm', dtype: 'q8', threads: 4 });
+    expect(chooseTier({ ...base, memGB: 4 }, 'small')).toMatchObject({ dtype: 'q8' });
+  });
+  test('smooth: GPU first, else q4 even on one thread or 4GB', () => {
+    expect(chooseTier({ ...base, gpu: true }, 'smooth')).toMatchObject({ device: 'webgpu', dtype: 'fp32' });
+    expect(chooseTier({ ...base, memGB: 4 }, 'smooth')).toMatchObject({ device: 'wasm', dtype: 'q4', threads: 4 });
+    expect(chooseTier({ ...base, isolated: false }, 'smooth')).toMatchObject({ dtype: 'q4', threads: 1 });
+    expect(chooseTier({ ...base, memGB: 2 }, 'smooth')).toMatchObject({ dtype: 'q8' });
+  });
+  test('auto is the default', () => {
+    expect(chooseTier(base, 'auto')).toEqual(chooseTier(base));
+  });
 });

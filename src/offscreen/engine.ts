@@ -2,6 +2,7 @@
 // surface the player uses: ensureEngine / synthesize / isEngineReady / engineDevice.
 
 export type { Device, Dtype } from './tier';
+import type { Quality } from '../shared/protocol';
 import type { Device, Dtype } from './tier';
 
 export interface Speech {
@@ -19,6 +20,8 @@ export interface LoadOptions {
   dtypeWasm?: Dtype;
   /** WASM threads (honoured only when the document is cross-origin isolated). */
   threads?: number;
+  /** The user's voice quality setting (Settings). Developer overrides above win over it. */
+  quality?: Quality;
   /** A previous session measured the GPU slower than real time (see offscreen.ts). */
   gpuSlowBefore?: boolean;
 }

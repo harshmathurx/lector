@@ -6,6 +6,7 @@ import {
   PAUSE_PARAGRAPH_MS,
 } from './chunker';
 import { prepareForSpeech } from './speech';
+import { cleanTitle } from './title';
 
 const LONG =
   'The quick brown fox jumps over the lazy dog, and then it keeps running through the field. ' +
@@ -86,5 +87,17 @@ describe('prepareForSpeech', () => {
 
   test('empty stays empty', () => {
     expect(prepareForSpeech('  ')).toBe('');
+  });
+});
+
+describe('cleanTitle', () => {
+  test('drops the site name, keeps the article part', () => {
+    expect(cleanTitle('Why we save articles | Longreads')).toBe('Why we save articles');
+    expect(cleanTitle('Hansel and Gretel - World Stories')).toBe('Hansel and Gretel');
+  });
+
+  test('leaves a plain title alone, tolerates empty', () => {
+    expect(cleanTitle('  Plain title ')).toBe('Plain title');
+    expect(cleanTitle(undefined)).toBe('');
   });
 });

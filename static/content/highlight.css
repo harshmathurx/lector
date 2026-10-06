@@ -11,3 +11,13 @@
   text-underline-offset: 3px;
   text-decoration-color: currentColor;
 }
+/* Windows High Contrast / forced colours: use the system's own highlight colours. */
+@media (forced-colors: active) {
+  ::highlight(lector-seg) {
+    background-color: Highlight;
+    color: HighlightText;
+  }
+  ::highlight(lector-read) {
+    text-decoration-color: HighlightText;
+  }
+}

@@ -14,7 +14,15 @@ export interface Article {
   paragraphs: ArticleParagraph[];
   /** Paragraph to begin reading from (read-from-here). */
   startParagraph: number;
+  /** Absolute URL of the article's lead image (og:image etc.), for Now Playing artwork. */
+  image?: string;
+  /** Site or author name for Now Playing ("og:site_name", author, else the hostname). */
+  site?: string;
 }
+
+/** Voice quality preference (Settings). Takes effect the next time the engine loads. */
+export type Quality = 'auto' | 'small' | 'smooth';
+export const QUALITIES: Quality[] = ['auto', 'small', 'smooth'];
 
 export type Status =
   | 'idle'
@@ -40,6 +48,10 @@ export interface PlayerState {
   /** Model download progress, 0..1. */
   loadProgress: number;
   device: 'webgpu' | 'wasm' | null;
+  /** WASM threads in use (null on WebGPU or before the engine loads). */
+  threads: number | null;
+  /** Language of the page being read (`<html lang>`), for the popup's own text. */
+  lang?: string;
   /** Text of the segment currently being read. */
   currentText: string;
   /**
@@ -65,6 +77,7 @@ export const IDLE_STATE: PlayerState = {
   remaining: null,
   loadProgress: 0,
   device: null,
+  threads: null,
   currentText: '',
   segProgress: 0,
 };
@@ -106,15 +119,18 @@ export type OffscreenRequest =
       article: Article;
       voice: string;
       speed: number;
+      quality?: Quality;
     }
   | { target: 'offscreen'; type: 'TTS_COMMAND'; command: Command }
   | { target: 'offscreen'; type: 'TTS_GET_STATE' }
   | { target: 'offscreen'; type: 'TTS_CLEAR_CACHE' }
-  | { target: 'offscreen'; type: 'TTS_WARM' };
+  | { target: 'offscreen'; type: 'TTS_WARM'; quality?: Quality };
 
 /** offscreen -> background */
 export type OffscreenEvent =
   | { type: 'VB_EVENT'; kind: 'status'; status: Status; error?: string }
+  /** Model download progress (whole percents), so the toolbar can say it with the popup closed. */
+  | { type: 'VB_EVENT'; kind: 'progress'; fraction: number }
   | {
       type: 'VB_EVENT';
       kind: 'segment';

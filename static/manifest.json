@@ -40,17 +40,33 @@
     },
     "next-paragraph": {
       "suggested_key": {
-        "default": "Alt+Shift+Right",
-        "mac": "Alt+Shift+Right"
+        "default": "Alt+Shift+Period",
+        "mac": "Alt+Shift+Period"
       },
       "description": "Skip to next paragraph"
     },
     "prev-paragraph": {
       "suggested_key": {
-        "default": "Alt+Shift+Left",
-        "mac": "Alt+Shift+Left"
+        "default": "Alt+Shift+Comma",
+        "mac": "Alt+Shift+Comma"
       },
       "description": "Back to previous paragraph"
+    },
+    "listen-from-here": {
+      "suggested_key": {
+        "default": "Alt+Shift+H",
+        "mac": "Alt+Shift+H"
+      },
+      "description": "Listen from here (selection, focused paragraph, or top of the screen)"
+    },
+    "stop": {
+      "description": "Stop reading"
+    },
+    "speed-up": {
+      "description": "Read faster"
+    },
+    "speed-down": {
+      "description": "Read slower"
     }
   },
   "cross_origin_embedder_policy": {
