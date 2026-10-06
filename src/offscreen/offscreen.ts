@@ -579,72 +579,16 @@ chrome.runtime.onMessage.addListener(
 
     (async () => {
       switch (message.type) {
+        case 'TTS_PING': {
+          sendResponse({ pong: true });
+          break;
+        }
+
         case 'TTS_START': {
           const article = message.data as ArticleData;
           console.log('[VB] TTS_START received:', article.title, article.paragraphs?.length, 'paragraphs');
-
-          // Cancel any existing playback
-          playbackGeneration++;
-          stopCurrentPlayback();
-          stopTimeUpdates();
-
-          // Per-session overrides beat persisted defaults
-          if (article.voice) {
-            state.voice = article.voice;
-          } else {
-            state.voice = defaultVoice;
-          }
-          if (typeof article.speed === 'number' && article.speed > 0) {
-            state.speed = article.speed;
-          } else {
-            state.speed = defaultSpeed;
-          }
-
-          paragraphs = article.paragraphs;
-          audioQueue = new Array(paragraphs.length).fill(null);
-          currentParagraphIndex = 0;
-          pausedAt = 0;
-          currentBuffer = null;
-          isPlaying = true;
-          isPaused = false;
-
-          state.title = article.title;
-          state.totalParagraphs = paragraphs.length;
-          state.status = 'loading';
-          state.progress = 0;
-          state.currentTime = 0;
-          state.duration = 0;
-          state.paragraphText = '';
-          state.error = undefined;
-          broadcastState();
-
-          // Resume audio context from user gesture
-          const ctx = getAudioContext();
-          if (ctx.state === 'suspended') {
-            await ctx.resume();
-          }
-
-          try {
-            await initTTS((progress) => {
-              state.progress = progress;
-              broadcastState();
-            });
-            console.log('[VB] TTS initialized, starting playback loop');
-            state.status = 'generating';
-            broadcastState();
-            playbackLoop().then(() => {
-              console.log('[VB] Playback loop exited');
-            }).catch((e) => {
-              console.error('[VB] Playback loop error:', e);
-            });
-            sendResponse({ status: 'started' });
-          } catch (e) {
-            console.error('[VB] TTS init failed:', e);
-            state.status = 'error';
-            state.error = `Failed to initialize TTS: ${e}`;
-            broadcastState();
-            sendResponse({ error: state.error });
-          }
+          await handleTTSStart(article);
+          sendResponse({ status: 'started' });
           break;
         }
 
@@ -836,6 +780,83 @@ chrome.runtime.onMessage.addListener(
   }
 );
 
-// Signal to the background service worker that our listener is registered
-// and we're ready to receive messages.
-chrome.runtime.sendMessage({ type: 'OFFSCREEN_READY' }).catch(() => {});
+// ─── Startup: poll for pending job ─────────────────────────────────────────
+// The background stores a job in chrome.storage.local before creating this
+// document. We poll for it here — this avoids the race where the background
+// sends a message before our listener is registered.
+
+async function handleTTSStart(article: ArticleData): Promise<void> {
+  // Cancel any existing playback
+  playbackGeneration++;
+  stopCurrentPlayback();
+  stopTimeUpdates();
+
+  // Per-session overrides beat persisted defaults
+  if (article.voice) {
+    state.voice = article.voice;
+  } else {
+    state.voice = defaultVoice;
+  }
+  if (typeof article.speed === 'number' && article.speed > 0) {
+    state.speed = article.speed;
+  } else {
+    state.speed = defaultSpeed;
+  }
+
+  paragraphs = article.paragraphs;
+  audioQueue = new Array(paragraphs.length).fill(null);
+  currentParagraphIndex = 0;
+  pausedAt = 0;
+  currentBuffer = null;
+  isPlaying = true;
+  isPaused = false;
+
+  state.title = article.title;
+  state.totalParagraphs = paragraphs.length;
+  state.status = 'loading';
+  state.progress = 0;
+  state.currentTime = 0;
+  state.duration = 0;
+  state.paragraphText = '';
+  state.error = undefined;
+  broadcastState();
+
+  const ctx = getAudioContext();
+  if (ctx.state === 'suspended') {
+    await ctx.resume();
+  }
+
+  try {
+    await initTTS((progress) => {
+      state.progress = progress;
+      broadcastState();
+    });
+    console.log('[VB] TTS initialized, starting playback loop');
+    state.status = 'generating';
+    broadcastState();
+    playbackLoop().then(() => {
+      console.log('[VB] Playback loop exited');
+    }).catch((e) => {
+      console.error('[VB] Playback loop error:', e);
+    });
+  } catch (e) {
+    console.error('[VB] TTS init failed:', e);
+    state.status = 'error';
+    state.error = `Failed to initialize TTS: ${e}`;
+    broadcastState();
+  }
+}
+
+(async function checkPendingJob() {
+  try {
+    const result = await chrome.storage.local.get('pendingJob');
+    const job = result.pendingJob;
+    if (job && job.type === 'TTS_START' && Date.now() - job.timestamp < 10000) {
+      console.log('[VB] Found pending job, starting...');
+      await chrome.storage.local.remove('pendingJob');
+      await handleTTSStart(job.data as ArticleData);
+    }
+  } catch (e) {
+    console.log('[VB] No pending job or error:', e);
+  }
+})();

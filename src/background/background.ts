@@ -1,32 +1,10 @@
-// Background service worker — coordinates between popup, content script,
-// and offscreen TTS document.
+// Background service worker — creates offscreen document, stores job in
+// storage for the offscreen to pick up. No push-based messaging to offscreen.
 
 const OFFSCREEN_DOCUMENT_PATH = 'offscreen/offscreen.html';
 
 let creatingOffscreen: Promise<void> | null = null;
 let activeTabId: number | null = null;
-let offscreenReady = false;
-
-// Listen for the offscreen document's ready ping
-chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
-  if (message.type === 'OFFSCREEN_READY') {
-    offscreenReady = true;
-    sendResponse({ ok: true });
-    return true;
-  }
-  return false;
-});
-
-async function waitForOffscreenReady(timeoutMs = 5000): Promise<void> {
-  if (offscreenReady) return;
-  const start = Date.now();
-  while (!offscreenReady && Date.now() - start < timeoutMs) {
-    await new Promise((r) => setTimeout(r, 50));
-  }
-  if (!offscreenReady) {
-    console.warn('[VB-BG] Offscreen did not send ready ping within timeout');
-  }
-}
 
 async function ensureOffscreenDocument(): Promise<void> {
   const existingContexts = await chrome.runtime.getContexts({
@@ -42,7 +20,6 @@ async function ensureOffscreenDocument(): Promise<void> {
   });
   await creatingOffscreen;
   creatingOffscreen = null;
-  offscreenReady = false; // Will be set when offscreen sends OFFSCREEN_READY
 }
 
 async function closeOffscreenDocument(): Promise<void> {
@@ -52,6 +29,7 @@ async function closeOffscreenDocument(): Promise<void> {
   if (existingContexts.length > 0) await chrome.offscreen.closeDocument();
 }
 
+// Forward TTS state updates to the content script on the active tab
 async function forwardStateToTab(state: Record<string, unknown>): Promise<void> {
   if (!activeTabId) return;
   try {
@@ -63,35 +41,27 @@ async function forwardStateToTab(state: Record<string, unknown>): Promise<void> 
 }
 
 // ─── Message Router ─────────────────────────────────────────────────────────
-//
-// IMPORTANT: chrome.runtime.sendMessage broadcasts to ALL listeners
-// (background, offscreen, popup). Each listener must return false for
-// messages it doesn't handle so the channel closes properly.
-//
-// The background only handles messages that need tab operations
-// (injecting content script, sending to the active tab).
-// Pure offscreen messages (TTS_PAUSE, etc.) go directly via
-// chrome.runtime.sendMessage and are picked up by the offscreen listener.
 
 const BG_HANDLED = new Set([
   'START_READING',
   'VB_TOGGLE_PLAY',
   'TTS_STOP',
   'TTS_STATE_UPDATE',
+  'TTS_PAUSE',
+  'TTS_RESUME',
+  'TTS_SET_SPEED',
+  'TTS_SET_VOICE',
+  'TTS_SEEK',
+  'TTS_GET_STATE',
 ]);
 
 chrome.runtime.onMessage.addListener(
   (
-    message: {
-      type: string;
-      data?: unknown;
-    },
+    message: { type: string; data?: unknown },
     sender: chrome.runtime.MessageSender,
     sendResponse: (response: unknown) => void
   ) => {
-    if (!BG_HANDLED.has(message.type)) {
-      return false;
-    }
+    if (!BG_HANDLED.has(message.type)) return false;
 
     // TTS_STATE_UPDATE from offscreen → forward to content script tab
     if (message.type === 'TTS_STATE_UPDATE') {
@@ -142,14 +112,26 @@ chrome.runtime.onMessage.addListener(
             return;
           }
 
-          await ensureOffscreenDocument();
-          await waitForOffscreenReady();
-
-          // Load user's saved preferences
+          // Load saved preferences
           const prefs = await chrome.storage.local.get(['defaultVoice', 'defaultSpeed']);
           if (prefs.defaultVoice) article.voice = prefs.defaultVoice;
           if (prefs.defaultSpeed) article.speed = prefs.defaultSpeed;
 
+          // Store the job in chrome.storage — the offscreen will poll for it.
+          // This avoids the race condition where we send a message before the
+          // offscreen's listener is registered.
+          await chrome.storage.local.set({
+            pendingJob: {
+              type: 'TTS_START',
+              data: article,
+              timestamp: Date.now(),
+            },
+          });
+
+          // Create the offscreen document — it will find the job in storage
+          await ensureOffscreenDocument();
+
+          // Show the floating player on the page
           try {
             await chrome.tabs.sendMessage(tab.id, {
               type: 'VB_SHOW_PLAYER',
@@ -157,49 +139,35 @@ chrome.runtime.onMessage.addListener(
             });
           } catch {}
 
-          // Send to offscreen — it will be handled by the offscreen listener
-          // (background doesn't handle TTS_START, so it won't loop)
-          const result = await chrome.runtime.sendMessage({
-            type: 'TTS_START',
-            data: article,
-          });
+          // Also try to send directly (in case offscreen is already running)
+          try {
+            await chrome.runtime.sendMessage({
+              type: 'TTS_START',
+              data: article,
+            });
+          } catch {
+            // Offscreen will pick it up from storage
+          }
 
-          sendResponse(result);
+          sendResponse({ status: 'started' });
           break;
         }
 
-        case 'VB_TOGGLE_PLAY': {
-          // From the floating player. We need to check state first, then
-          // send the right command. We talk DIRECTLY to the offscreen document
-          // by NOT handling TTS_GET_STATE here in background — the offscreen
-          // listener will pick it up since we return false for it.
+        case 'VB_TOGGLE_PLAY':
+        case 'TTS_PAUSE':
+        case 'TTS_RESUME':
+        case 'TTS_SET_SPEED':
+        case 'TTS_SET_VOICE':
+        case 'TTS_SEEK':
+        case 'TTS_GET_STATE': {
+          // Forward to offscreen — it may or may not be ready yet,
+          // but these are user actions that happen after TTS_START
+          // so the offscreen should exist by now.
           try {
-            // Check if offscreen exists first
-            const contexts = await chrome.runtime.getContexts({
-              contextTypes: [chrome.runtime.ContextType.OFFSCREEN_DOCUMENT],
-            });
-            if (contexts.length === 0) {
-              sendResponse({ ok: false, reason: 'no_offscreen' });
-              return;
-            }
-
-            // Get state from offscreen — background returns false for
-            // TTS_GET_STATE, so only the offscreen listener responds.
-            const state = (await chrome.runtime.sendMessage({
-              type: 'TTS_GET_STATE',
-            })) as Record<string, unknown>;
-
-            if (state?.status === 'paused') {
-              await chrome.runtime.sendMessage({ type: 'TTS_RESUME' });
-            } else if (
-              state?.status === 'playing' ||
-              state?.status === 'generating'
-            ) {
-              await chrome.runtime.sendMessage({ type: 'TTS_PAUSE' });
-            }
-            sendResponse({ ok: true });
+            const result = await chrome.runtime.sendMessage(message);
+            sendResponse(result);
           } catch (e) {
-            sendResponse({ ok: false, reason: String(e) });
+            sendResponse({ error: String(e) });
           }
           break;
         }
@@ -258,13 +226,19 @@ chrome.commands.onCommand.addListener(async (command) => {
 
     if (!article?.paragraphs?.length) return;
 
-    await ensureOffscreenDocument();
-    await waitForOffscreenReady();
-
-    // Load user's saved preferences
     const prefs = await chrome.storage.local.get(['defaultVoice', 'defaultSpeed']);
     if (prefs.defaultVoice) article.voice = prefs.defaultVoice;
     if (prefs.defaultSpeed) article.speed = prefs.defaultSpeed;
+
+    await chrome.storage.local.set({
+      pendingJob: {
+        type: 'TTS_START',
+        data: article,
+        timestamp: Date.now(),
+      },
+    });
+
+    await ensureOffscreenDocument();
 
     try {
       await chrome.tabs.sendMessage(tab.id, {
@@ -273,9 +247,11 @@ chrome.commands.onCommand.addListener(async (command) => {
       });
     } catch {}
 
-    await chrome.runtime.sendMessage({
-      type: 'TTS_START',
-      data: article,
-    });
+    try {
+      await chrome.runtime.sendMessage({
+        type: 'TTS_START',
+        data: article,
+      });
+    } catch {}
   }
 });
