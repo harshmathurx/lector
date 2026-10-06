@@ -212,7 +212,6 @@ let downloadTotalFiles = 0;
 function getAudioContext(): AudioContext {
   if (!audioContext) {
     // Use default sample rate (usually 44100 or 48000) — NOT 24000.
-    // If we force 24kHz but the system resamples, playback speed gets wrong.
     audioContext = new AudioContext();
     gainNode = audioContext.createGain();
     gainNode.connect(audioContext.destination);
@@ -222,6 +221,10 @@ function getAudioContext(): AudioContext {
     audioContext.resume();
   }
   return audioContext;
+}
+
+function ctx_sampleRate(): number {
+  return audioContext?.sampleRate || 48000;
 }
 
 // ─── TTS Engine ─────────────────────────────────────────────────────────────
@@ -699,12 +702,28 @@ async function playbackLoop(): Promise<void> {
     broadcastState();
 
     const offset = pausedAt;
-    pausedAt = 0;
+    // Don't reset pausedAt here — it gets reset when playback COMPLETES
+    // (not when the source is stopped mid-way). This way, if we pause
+    // and resume, we still have the correct offset.
     await playBuffer(playTarget, offset);
 
-    // After playback ends (or is interrupted), advance if not paused
-    if (!isPaused && isPlaying && gen === playbackGeneration) {
-      currentParagraphIndex++;
+    // Playback finished (either completed or was interrupted)
+    if (!isPaused) {
+      // Completed naturally — reset pausedAt and advance
+      pausedAt = 0;
+      if (isPlaying && gen === playbackGeneration) {
+        currentParagraphIndex++;
+
+        // Insert a brief pause between paragraphs for natural prosody.
+        // 400ms silence at the audio context's sample rate.
+        if (currentParagraphIndex < paragraphs.length && isPlaying) {
+          const silenceSamples = Math.round(ctx_sampleRate() * 0.4); // 400ms
+          const silence = new Float32Array(silenceSamples);
+          const silenceBuf = getAudioContext().createBuffer(1, silenceSamples, ctx_sampleRate());
+          silenceBuf.getChannelData(0).set(silence);
+          await playBuffer(silenceBuf, 0);
+        }
+      }
     }
   }
 
