@@ -55,7 +55,7 @@ try {
   for (let i = 0; i < 400; i++) { s = await show('start'); if (s.status === 'playing' || s.status === 'error') break; await sleep(2000); }
   log('time to first audio', ((Date.now() - t0) / 1000).toFixed(1) + 's');
   if (s.status !== 'playing') throw new Error('never played: ' + s.status + ' ' + s.error);
-  const hl = () => ev(pc, `JSON.stringify({seg: CSS.highlights.has('vb-seg') ? [...CSS.highlights.get('vb-seg')][0].toString().slice(0,50) : null})`);
+  const hl = () => ev(pc, `JSON.stringify({seg: CSS.highlights.has('lector-seg') ? [...CSS.highlights.get('lector-seg')][0].toString().slice(0,50) : null})`);
   await sleep(3000); await show('playing'); log('page highlight', await hl());
   const a = await st(); await sleep(2000); const b = await st(); log('elapsed advances', a.elapsed < b.elapsed);
 

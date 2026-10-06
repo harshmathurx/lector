@@ -50,9 +50,10 @@ let loadProgress = 0;
 
 let playIdx = 0;
 let playOffset = 0; // seconds into the current buffer (valid when not playing)
-let lastEmittedIdx = -1;
 
 const buffers = new Map<number, AudioBuffer | 'failed'>();
+/** Seconds of actual speech per segment (the buffer also holds the trailing pause). */
+const speechSecs = new Map<number, number>();
 let epoch = 0; // bumps when buffers become invalid (voice/speed change, new session)
 let sessionId = 0; // bumps on every start/stop
 let consecutiveFailures = 0;
@@ -77,13 +78,23 @@ function setStatus(next: Status, error?: string): void {
   updateMediaSession();
 }
 
-function emitSegment(): void {
-  if (lastEmittedIdx === playIdx) return;
-  lastEmittedIdx = playIdx;
+/**
+ * Announce the current segment. Sent every time a source starts (not only when
+ * the index changes) so the page can restart its ink animation after a
+ * resume. durationMs 0 means "no audio yet": highlight only, don't animate.
+ */
+function emitSegment(durationMs = 0, offsetMs = 0): void {
   const seg = segments[playIdx];
-  if (seg) {
-    send({ type: 'VB_EVENT', kind: 'segment', paraIndex: seg.para, start: seg.start, end: seg.end });
-  }
+  if (!seg) return;
+  send({
+    type: 'VB_EVENT',
+    kind: 'segment',
+    paraIndex: seg.para,
+    start: seg.start,
+    end: seg.end,
+    durationMs,
+    offsetMs,
+  });
 }
 
 // ─── Audio ──────────────────────────────────────────────────────────────────
@@ -115,7 +126,8 @@ function toBuffer(samples: Float32Array, rate: number, pauseMs: number): AudioBu
   return buf;
 }
 
-async function synth(seg: Segment, v: string, s: number): Promise<AudioBuffer> {
+async function synth(idx: number, v: string, s: number): Promise<AudioBuffer> {
+  const seg = segments[idx];
   const key = await cacheKey(seg.speech, v, s);
   let samples = await cacheGet(key);
   let rate = MODEL_RATE;
@@ -129,6 +141,7 @@ async function synth(seg: Segment, v: string, s: number): Promise<AudioBuffer> {
   secPerChar = secPerChar === DEFAULT_SEC_PER_CHAR
     ? seconds / seg.chars
     : secPerChar * 0.7 + (seconds / seg.chars) * 0.3;
+  speechSecs.set(idx, seconds);
   return toBuffer(samples, rate, seg.pauseMs);
 }
 
@@ -157,18 +170,18 @@ async function pump(): Promise<void> {
         if (idx === -1 || !isEngineReady()) break;
         const myEpoch = epoch;
         const mySession = sessionId;
-        const seg = segments[idx];
         let result: AudioBuffer | 'failed';
         try {
-          result = await synth(seg, voice, speed);
+          result = await synth(idx, voice, speed);
           consecutiveFailures = 0;
         } catch (e) {
-          console.error('[VB] Segment generation failed:', idx, e);
+          console.error('[Lector] Segment generation failed:', idx, e);
           result = 'failed';
           consecutiveFailures++;
         }
         if (mySession !== sessionId || myEpoch !== epoch) break; // stale; restart scan
         buffers.set(idx, result);
+        if (result === 'failed') speechSecs.delete(idx);
         if (consecutiveFailures >= MAX_CONSECUTIVE_FAILURES) {
           fail('The voice engine kept failing on this page. Try a different voice, or reload the page and try again.');
           return;
@@ -183,7 +196,10 @@ async function pump(): Promise<void> {
 
 function evictBehind(): void {
   for (const idx of buffers.keys()) {
-    if (idx < playIdx - KEEP_BEHIND) buffers.delete(idx);
+    if (idx < playIdx - KEEP_BEHIND) {
+      buffers.delete(idx);
+      speechSecs.delete(idx);
+    }
   }
 }
 
@@ -231,7 +247,8 @@ function tryPlay(): void {
   src.start(0, offset);
   startedAt = c.currentTime - offset;
   setStatus('playing');
-  emitSegment();
+  const speechMs = (speechSecs.get(playIdx) ?? buf.duration) * 1000;
+  emitSegment(speechMs, Math.min(offset * 1000, speechMs));
 }
 
 function advance(): void {
@@ -264,7 +281,6 @@ function jumpToSegment(idx: number): void {
   stopSource();
   playIdx = Math.max(0, Math.min(idx, segments.length - 1));
   playOffset = 0;
-  lastEmittedIdx = -1;
   evictBehind();
   void pump();
   if (status === 'paused') emitSegment();
@@ -343,10 +359,10 @@ function changeSpeed(next: number): void {
 function invalidateAudio(): void {
   epoch++;
   buffers.clear();
+  speechSecs.clear();
   if (!article) return; // idle: just remember the preference
   stopSource();
   playOffset = 0;
-  lastEmittedIdx = -1;
   if (status === 'playing') setStatus('buffering');
   void pump();
   tryPlay();
@@ -385,12 +401,12 @@ function resetSession(silent = false): void {
   epoch++;
   stopSource();
   buffers.clear();
+  speechSecs.clear();
   article = null;
   segments = [];
   totalChars = 0;
   playIdx = 0;
   playOffset = 0;
-  lastEmittedIdx = -1;
   consecutiveFailures = 0;
   loadProgress = 0;
   errorMessage = undefined;
@@ -429,7 +445,7 @@ async function startSession(art: Article, v: string, s: number): Promise<void> {
         if (mine === sessionId) loadProgress = p;
       });
     } catch (e) {
-      console.error('[VB] Engine load failed:', e);
+      console.error('[Lector] Engine load failed:', e);
       if (mine === sessionId) {
         fail(
           navigator.onLine
@@ -454,7 +470,7 @@ function stopSession(): void {
 
 function setupMediaSession(title: string): void {
   if (!('mediaSession' in navigator)) return;
-  navigator.mediaSession.metadata = new MediaMetadata({ title, artist: 'Voicebox Reader' });
+  navigator.mediaSession.metadata = new MediaMetadata({ title, artist: 'Lector' });
   navigator.mediaSession.setActionHandler('play', resume);
   navigator.mediaSession.setActionHandler('pause', pause);
   navigator.mediaSession.setActionHandler('nexttrack', nextParagraph);
@@ -477,6 +493,8 @@ function getState(): PlayerState {
   const buf = buffers.get(playIdx);
   const dur = buf instanceof AudioBuffer ? buf.duration : 0;
   const frac = seg && dur > 0 ? Math.min(1, currentOffset() / dur) : 0;
+  const speech = speechSecs.get(playIdx) ?? 0;
+  const segProgress = speech > 0 && buf instanceof AudioBuffer ? Math.min(1, currentOffset() / speech) : 0;
   const charsDone = seg ? seg.cumChars + frac * seg.chars : 0;
   const known = status !== 'loading' && status !== 'starting';
   return {
@@ -492,6 +510,7 @@ function getState(): PlayerState {
     loadProgress,
     device: engineDevice(),
     currentText: seg?.text ?? '',
+    segProgress,
     error: errorMessage,
   };
 }
@@ -551,4 +570,4 @@ chrome.runtime.onMessage.addListener((message: OffscreenRequest, _sender, sendRe
   return false;
 });
 
-console.log('[VB] Offscreen ready');
+console.log('[Lector] Offscreen ready');

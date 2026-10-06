@@ -42,6 +42,12 @@ export interface PlayerState {
   device: 'webgpu' | 'wasm' | null;
   /** Text of the segment currently being read. */
   currentText: string;
+  /**
+   * 0..1 through the SPOKEN part of the current segment (trailing pause
+   * excluded). Kokoro gives no word timings, so UIs estimate the current word
+   * by spreading this across the segment's characters.
+   */
+  segProgress: number;
   error?: string;
   /** True when the offscreen document is gone but the session can be restarted. */
   recoverable?: boolean;
@@ -60,6 +66,7 @@ export const IDLE_STATE: PlayerState = {
   loadProgress: 0,
   device: null,
   currentText: '',
+  segProgress: 0,
 };
 
 /** Persisted by the background so a dead offscreen document can be recovered. */
@@ -108,14 +115,33 @@ export type OffscreenRequest =
 /** offscreen -> background */
 export type OffscreenEvent =
   | { type: 'VB_EVENT'; kind: 'status'; status: Status; error?: string }
-  | { type: 'VB_EVENT'; kind: 'segment'; paraIndex: number; start: number; end: number }
+  | {
+      type: 'VB_EVENT';
+      kind: 'segment';
+      paraIndex: number;
+      start: number;
+      end: number;
+      /** Length of the spoken audio in ms (trailing pause excluded). */
+      durationMs: number;
+      /** Where playback starts within it, in ms (non-zero after resume). */
+      offsetMs: number;
+    }
   | { type: 'VB_EVENT'; kind: 'finished' };
 
 /** background -> content script */
 export type ContentRequest =
   | { type: 'VB_PING' }
   | { type: 'EXTRACT_ARTICLE'; mode: 'article' | 'selection' | 'fromSelection' }
-  | { type: 'VB_HIGHLIGHT'; paraIndex: number; start: number; end: number }
+  | {
+      type: 'VB_HIGHLIGHT';
+      paraIndex: number;
+      start: number;
+      end: number;
+      durationMs: number;
+      offsetMs: number;
+    }
+  /** Freeze the in-progress "ink" where it is (paused / buffering). */
+  | { type: 'VB_HIGHLIGHT_PAUSE' }
   | { type: 'VB_HIGHLIGHT_CLEAR' };
 
 export const SPEEDS = [0.75, 1, 1.25, 1.5, 1.75, 2];

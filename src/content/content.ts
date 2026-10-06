@@ -154,7 +154,7 @@ function extractWithReadability(): Extracted | null {
     liveBlocks.forEach((el) => el.removeAttribute('data-vb-i'));
     parsed = new Readability(clone).parse();
   } catch (e) {
-    console.warn('[VB-CS] Readability failed:', e);
+    console.warn('[Lector page] Readability failed:', e);
   } finally {
     liveBlocks.forEach((el) => el.removeAttribute('data-vb-i'));
   }
@@ -266,29 +266,110 @@ function extract(mode: 'article' | 'selection' | 'fromSelection'): Article | nul
 let reading = false;
 let lastUserScroll = 0;
 
-function highlightSegment(paraIndex: number, start: number, end: number): void {
+const SEG_HL = 'lector-seg';
+const READ_HL = 'lector-read';
+
+type HighlightRegistry = Map<string, unknown>;
+
+function highlights(): HighlightRegistry | undefined {
+  return (CSS as unknown as { highlights?: HighlightRegistry }).highlights;
+}
+
+const reducedMotion = window.matchMedia('(prefers-reduced-motion: reduce)');
+
+// ─── Ink-in: the spoken part of the sentence is underlined, word by word ────
+// Kokoro gives no word timings, so we spread the sentence's audio duration
+// evenly over its characters and snap to word ends. Timing comes from the
+// segment event and runs on local rAF, so no per-word messages are needed.
+
+interface Ink {
+  map: TextMap;
+  start: number;
+  /** End offset (relative to `start`) of each word in the sentence. */
+  wordEnds: number[];
+  length: number;
+  durationMs: number;
+  offsetMs: number;
+  receivedAt: number;
+  /** Last word index drawn, to skip rebuilding an identical Highlight. */
+  drawn: number;
+}
+
+let ink: Ink | null = null;
+let inkFrame = 0;
+
+function wordEndsOf(text: string): number[] {
+  const ends: number[] = [];
+  for (const m of text.matchAll(/\S+/g)) ends.push(m.index! + m[0].length);
+  return ends;
+}
+
+function stopInk(): void {
+  if (inkFrame) cancelAnimationFrame(inkFrame);
+  inkFrame = 0;
+}
+
+function drawInk(wordIdx: number): void {
+  if (!ink || wordIdx === ink.drawn) return;
+  const range = rangeFor(ink.map, ink.start, ink.start + ink.wordEnds[wordIdx]);
+  if (!range) return;
+  ink.drawn = wordIdx;
+  highlights()?.set(READ_HL, new Highlight(range));
+}
+
+function inkFrameTick(now: number): void {
+  inkFrame = 0;
+  if (!ink) return;
+  const fraction = (ink.offsetMs + (now - ink.receivedAt)) / ink.durationMs;
+  const last = ink.wordEnds.length - 1;
+  const target = fraction * ink.length;
+  let idx = ink.wordEnds.findIndex((end) => end >= target);
+  if (idx === -1) idx = last;
+  drawInk(idx);
+  if (fraction < 1) inkFrame = requestAnimationFrame(inkFrameTick);
+}
+
+function startInk(block: Block, start: number, end: number, durationMs: number, offsetMs: number): void {
+  stopInk();
+  highlights()?.delete(READ_HL);
+  ink = null;
+  if (!block.map || !(durationMs > 0) || reducedMotion.matches) return;
+  const text = block.map.text.slice(start, end);
+  const wordEnds = wordEndsOf(text);
+  if (!wordEnds.length) return;
+  ink = { map: block.map, start, wordEnds, length: text.length, durationMs, offsetMs, receivedAt: performance.now(), drawn: -1 };
+  inkFrame = requestAnimationFrame(inkFrameTick);
+}
+
+/** Paused or buffering: keep what is underlined, stop advancing. */
+function freezeInk(): void {
+  stopInk();
+}
+
+// ─── Sentence highlight ─────────────────────────────────────────────────────
+
+function highlightSegment(paraIndex: number, start: number, end: number, durationMs: number, offsetMs: number): void {
   const block = blocks[paraIndex];
-  const hl = (CSS as unknown as { highlights?: Map<string, unknown> }).highlights;
+  const hl = highlights();
   if (!block || !hl || typeof Highlight === 'undefined') return;
   try {
     if (!block.map) block.map = buildTextMap(block.el);
-    const para = document.createRange();
-    para.selectNodeContents(block.el);
-    hl.set('vb-para', new Highlight(para));
     const seg = rangeFor(block.map, start, end);
-    if (seg) {
-      hl.set('vb-seg', new Highlight(seg));
-      scrollIntoComfort(seg);
-    }
+    if (!seg) return;
+    hl.set(SEG_HL, new Highlight(seg));
+    startInk(block, start, end, durationMs, offsetMs);
+    scrollIntoComfort(seg);
   } catch (e) {
-    console.warn('[VB-CS] highlight failed:', e);
+    console.warn('[Lector page] highlight failed:', e);
   }
 }
 
 function clearHighlight(): void {
-  const hl = (CSS as unknown as { highlights?: Map<string, unknown> }).highlights;
-  hl?.delete('vb-para');
-  hl?.delete('vb-seg');
+  stopInk();
+  ink = null;
+  const hl = highlights();
+  hl?.delete(SEG_HL);
+  hl?.delete(READ_HL);
 }
 
 /** Keep the spoken text on screen, but never fight a user who is scrolling. */
@@ -344,7 +425,10 @@ if (!window.__vbLoaded) {
           return false;
         }
         case 'VB_HIGHLIGHT':
-          highlightSegment(message.paraIndex, message.start, message.end);
+          highlightSegment(message.paraIndex, message.start, message.end, message.durationMs, message.offsetMs);
+          return false;
+        case 'VB_HIGHLIGHT_PAUSE':
+          freezeInk();
           return false;
         case 'VB_HIGHLIGHT_CLEAR':
           reading = false;

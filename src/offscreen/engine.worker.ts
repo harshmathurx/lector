@@ -71,7 +71,7 @@ async function load(): Promise<void> {
       await loadModel('webgpu');
       return;
     } catch (e) {
-      console.warn('[VB] WebGPU load failed, falling back to WASM:', e);
+      console.warn('[Lector] WebGPU load failed, falling back to WASM:', e);
     }
   }
   await loadModel('wasm');
@@ -84,7 +84,7 @@ async function generate(text: string, voice: string, speed: number) {
   } catch (e) {
     // WebGPU can fail at inference time (driver issues). Drop to WASM once.
     if (device !== 'webgpu') throw e;
-    console.warn('[VB] WebGPU inference failed, reloading on WASM:', e);
+    console.warn('[Lector] WebGPU inference failed, reloading on WASM:', e);
     kokoro = null;
     await loadModel('wasm');
     return kokoro!.generate(text, { voice, speed });

@@ -68,7 +68,7 @@ async function ensureOffscreen(): Promise<void> {
       if (!(await hasOffscreen())) await createOffscreen();
       if (await pingOffscreen(8000)) return;
       // Document exists but never answered: recreate once.
-      console.warn('[VB-BG] Offscreen did not answer, recreating');
+      console.warn('[Lector bg] Offscreen did not answer, recreating');
       if (await hasOffscreen()) await chrome.offscreen.closeDocument();
       await createOffscreen();
       if (!(await pingOffscreen(8000))) {
@@ -235,23 +235,29 @@ async function getState(): Promise<PlayerState> {
 
 // ─── Badge ──────────────────────────────────────────────────────────────────
 
-function setBadge(text: string, color = '#6366f1'): void {
+const BADGE_INK = '#0A0A0A';
+const BADGE_ERROR = '#C2410C';
+
+function setBadge(text: string, color = BADGE_INK): void {
   void chrome.action.setBadgeBackgroundColor({ color });
+  void chrome.action.setBadgeTextColor({ color: '#FFFFFF' });
   void chrome.action.setBadgeText({ text });
 }
 
 function flashError(e: unknown): void {
   const message = e instanceof UserFacingError ? e.message : 'Something went wrong. Please try again.';
-  console.error('[VB-BG]', e);
-  setBadge('!', '#ef4444');
+  console.error('[Lector bg]', e);
+  setBadge('!', BADGE_ERROR);
   void chrome.action.setTitle({ title: message });
   setTimeout(() => {
     setBadge('');
-    void chrome.action.setTitle({ title: 'Voicebox Reader' });
+    void chrome.action.setTitle({ title: 'Lector' });
   }, 6000);
 }
 
 // ─── Offscreen events ───────────────────────────────────────────────────────
+
+let eventChain: Promise<void> = Promise.resolve();
 
 async function onOffscreenEvent(event: OffscreenEvent): Promise<void> {
   const session = await loadSession();
@@ -264,6 +270,8 @@ async function onOffscreenEvent(event: OffscreenEvent): Promise<void> {
         paraIndex: event.paraIndex,
         start: event.start,
         end: event.end,
+        durationMs: event.durationMs,
+        offsetMs: event.offsetMs,
       }).catch(() => {});
     }
     return;
@@ -274,7 +282,10 @@ async function onOffscreenEvent(event: OffscreenEvent): Promise<void> {
     return;
   }
 
-  // status
+  // status: anything that stops the audio freezes the ink on the page
+  if (session && ['paused', 'buffering', 'loading', 'error'].includes(event.status)) {
+    contentCall(session.tabId, { type: 'VB_HIGHLIGHT_PAUSE' }).catch(() => {});
+  }
   switch (event.status) {
     case 'idle':
       await endSession(session);
@@ -289,10 +300,10 @@ async function onOffscreenEvent(event: OffscreenEvent): Promise<void> {
       setBadge('…');
       break;
     case 'paused':
-      setBadge('❚❚', '#f59e0b');
+      setBadge('❚❚');
       break;
     case 'error':
-      setBadge('!', '#ef4444');
+      setBadge('!', BADGE_ERROR);
       break;
   }
 }
@@ -318,7 +329,9 @@ chrome.runtime.onMessage.addListener((raw: unknown, _sender, sendResponse) => {
   const message = raw as BackgroundRequest | OffscreenEvent;
 
   if (message.type === 'VB_EVENT') {
-    void onOffscreenEvent(message);
+    // Strictly in order: handlers await storage, and a late "paused" landing
+    // after a newer "playing" would freeze the page highlight by mistake.
+    eventChain = eventChain.then(() => onOffscreenEvent(message)).catch((e) => console.error('[Lector]', e));
     return false;
   }
 
@@ -389,9 +402,9 @@ const MENU_PAGE = 'vb-page';
 
 chrome.runtime.onInstalled.addListener((details) => {
   chrome.contextMenus.removeAll(() => {
-    chrome.contextMenus.create({ id: MENU_FROM_HERE, title: 'Read aloud from here', contexts: ['selection'] });
-    chrome.contextMenus.create({ id: MENU_SELECTION, title: 'Read only the selection aloud', contexts: ['selection'] });
-    chrome.contextMenus.create({ id: MENU_PAGE, title: 'Read this page aloud', contexts: ['page'] });
+    chrome.contextMenus.create({ id: MENU_FROM_HERE, title: 'Listen from here', contexts: ['selection'] });
+    chrome.contextMenus.create({ id: MENU_SELECTION, title: 'Listen to selection', contexts: ['selection'] });
+    chrome.contextMenus.create({ id: MENU_PAGE, title: 'Listen to this page', contexts: ['page'] });
   });
   if (details.reason === 'install') void chrome.storage.local.set({ firstRun: true });
 });

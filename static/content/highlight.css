@@ -1,8 +1,13 @@
-/* Voicebox Reader: sentence highlighting via the CSS Custom Highlight API.
-   Uses translucent colors so it reads on both light and dark pages. */
-::highlight(vb-para) {
-  background-color: rgba(129, 140, 248, 0.12);
+/* Lector: sentence highlighting via the CSS Custom Highlight API.
+   Neutral, translucent colours so it reads on both light and dark pages.
+   ::highlight() only honours color, background-color, text-decoration*, text-shadow. */
+::highlight(lector-seg) {
+  background-color: rgba(127, 127, 127, 0.18);
 }
-::highlight(vb-seg) {
-  background-color: rgba(129, 140, 248, 0.38);
+/* The already-spoken part of the sentence; grows word by word. */
+::highlight(lector-read) {
+  text-decoration: underline;
+  text-decoration-thickness: 2px;
+  text-underline-offset: 3px;
+  text-decoration-color: currentColor;
 }
