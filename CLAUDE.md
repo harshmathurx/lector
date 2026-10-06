@@ -11,35 +11,37 @@ A Chrome extension that reads any web article aloud with natural AI voices. Buil
 - Fast. Lightweight. Doesn't heat up the machine.
 - Feels like a product, not a demo.
 
-## Current Architecture
+## Current Architecture (v0.2)
 
 ```
-Chrome Extension (MV3)
-├── Popup (popup.html + popup.ts)
-│   → ONLY UI surface. Voice picker, speed, play/pause, stop, progress.
-│   → Voice previews via pre-generated static MP3 files (instant, no model needed)
-│   → Saves default voice/speed to chrome.storage.local
-│
-├── Background Service Worker (background.ts)
-│   → Message router between popup ↔ offscreen
-│   → Creates offscreen document on demand
-│   → Handles keyboard shortcut (Alt+Shift+R)
-│   → Injects content script if not already on page
-│
-├── Content Script (content.ts)
-│   → MINIMAL: only extracts article text via Mozilla Readability
-│   → No DOM injection, no floating player, no styles
-│   → Returns { title, textContent, url, paragraphs[] }
-│   → Paragraph splitting: double-newline → single-newline → sentence-chunked
-│
-└── Offscreen Document (offscreen.html + offscreen.ts)
-    → Runs Kokoro 82M TTS via kokoro-js (ONNX Runtime Web)
-    → WebGPU (fp32) with WASM (q8) fallback
-    → Web Audio API playback (AudioContext → GainNode → destination)
-    → IndexedDB cache for generated audio (24h TTL, LRU eviction at 200 entries)
-    → Picks up work from chrome.storage.local 'pendingJob' (avoids race condition)
-    → Pre-generates next paragraph while playing current
+Popup (popup.html + popup.ts)         ONLY UI. Holds no playback state: polls background `VB_GET_STATE` every 300ms
+│                                      and renders PlayerState. Voice sheet (search/tabs/favorites), speed, seek bar,
+│                                      prev/next paragraph, settings (clear cache), first-run banner.
+Background SW (background.ts)         Lifecycle + routing only. Extracts article via content script, owns the offscreen
+│                                      doc (ping handshake, recreate once), relays highlight events to the tab, persists
+│                                      the session in chrome.storage.session so it can RECOVER if Chrome kills the
+│                                      offscreen doc (it does after 30s without audio). Context menu, shortcuts, badge,
+│                                      5-min idle alarm closes the offscreen doc.
+Content script (content.ts)           Injected ON DEMAND (activeTab). Readability on a clone, but paragraph text comes from
+│                                      the LIVE DOM (temporary data-vb-i attrs map clone→live) so we keep a text↔DOM map.
+│                                      Highlights the spoken sentence via CSS Custom Highlight API (no DOM changes),
+│                                      smart auto-scroll (yields to user scrolling), Alt+click paragraph = read from here.
+Offscreen (offscreen.ts, engine.ts, cache.ts)
+    offscreen.ts: session + player. Segments (≈sentences) → lookahead pump (4 ahead) → AudioBuffers with the pause baked
+    in as trailing silence → one source at a time; pause/seek/skip are all segment based. Speed/voice change regenerates
+    from the current segment. Tiny to evaluate: registers its listener first.
+    engine.ts: lazy `import()` of onnxruntime-web + kokoro-js (load failure = error state, not a dead doc). WebGPU→WASM
+    fallback at load AND at inference time. Serial inference queue.
+    cache.ts: IndexedDB, sha256(voice|speed|text) key, Float32Array values, 48h TTL, 500 entries.
+shared/: protocol.ts (types), chunker.ts (Intl.Segmenter sentence split → offsets into ORIGINAL text),
+         speech.ts (display text → speakable text, applied per segment AFTER chunking), voices.ts.
 ```
+
+**Why no `<all_urls>` / always-on content script:** privacy story ("nothing leaves your browser") and store review. We use
+`activeTab` + `scripting`; host_permissions are limited to huggingface.co / hf.co for the model download.
+
+**Offscreen 30s rule:** reason AUDIO_PLAYBACK docs are closed after 30s without audio (model download, long pause). This was
+the likely cause of old bug "offscreen sometimes doesn't load". Mitigated by session recovery, not prevented.
 
 ## Model: Kokoro 82M
 
@@ -69,45 +71,29 @@ Chrome Extension (MV3)
 
 Voice previews: 54 pre-generated MP3 files (~25KB each, 1.3MB total) in `static/previews/`. Generated via the Voicebox Python backend. Each says "Hi, I'm [name], and I'll be reading to you."
 
-## What's Been Built and Works
+## Status (v0.2)
 
-1. ✅ Article extraction (Mozilla Readability, multi-strategy paragraph splitting)
-2. ✅ Kokoro TTS in browser via WebGPU/WASM (model cached in IndexedDB after first download)
-3. ✅ Audio playback via Web Audio API (AudioContext, GainNode, resampling from 24kHz to context rate)
-4. ✅ Pause/Resume with correct buffer position tracking
-5. ✅ Voice switching mid-playback (regenerates current paragraph with new voice)
-6. ✅ Speed control via Kokoro's native speed parameter (0.75x-2x, no pitch shift)
-7. ✅ Voice preview MP3s (instant, no model download needed)
-8. ✅ Audio caching in IndexedDB (24h TTL, LRU eviction)
-9. ✅ Pre-generation of next paragraph while playing current
-10. ✅ Storage-based job queue for offscreen (avoids race condition on creation)
-11. ✅ Keyboard shortcut (Alt+Shift+R)
-12. ✅ Long paragraph chunking (>400 chars split at sentence boundaries)
+**Fixed in the v0.2 rewrite:** voice/speed changes (payload shape mismatch popup↔offscreen), skip skipping two paragraphs,
+pause position wrong at speed≠1, cache key collisions + Array.from(Float32Array) cache, seek hack, double message delivery,
+offscreen eval failures being silent, no seek bar, no read-from-here, no progress/time-left, no paragraph navigation,
+no "what's being read", no settings, no onboarding, `<all_urls>` permission.
 
-## Known Bugs and Issues
+**Added:** sentence streaming with lookahead (first audio ≈ first sentence), on-page sentence highlight + auto-scroll,
+Alt+click / context-menu "Read aloud from here" / "Read selection", seek bar + time left, prev/next paragraph + shortcuts
+(Alt+Shift+←/→), voice picker with search/favorites, media keys (mediaSession), badge status, session recovery, speech text
+cleaning (citations, URLs, emoji, dashes), unit tests (`bun test src/shared`).
 
-### Critical
-1. ~~**Paragraph 22 failure on Substack**~~ — FIXED with prosody-aware chunking (sentence → clause → word boundaries) + silence gaps between concatenated chunks.
+**Verified:** tsc clean, bun build, chunker/speech unit tests, content-script extraction + highlight mapping in headless Chrome
+on a sample article, popup rendering (screenshots with a chrome stub).
+**NOT verified (needs a real load-unpacked run):** actual audio playback end to end, WebGPU/WASM model load under the new
+lazy imports, offscreen recovery after Chrome's 30s close, mediaSession media keys in an offscreen doc, HF CORS with the narrowed
+host_permissions, context-menu flow, Alt+click.
 
-2. ~~**Pause/resume doesn't work**~~ — FIXED. `pausedAt` was consumed when playBuffer started instead of when playback completed. Now persists across pause/resume cycles.
-
-3. ~~**No paragraph break pause**~~ — FIXED. 400ms silence inserted between paragraphs.
-
-4. **Offscreen document sometimes doesn't load** — the 5MB JS bundle (ONNX Runtime + kokoro-js) occasionally crashes silently. No error in console. The `checkPendingJob` poll may not run. Needs investigation into whether it's a memory issue, a WASM compilation timeout, or a module evaluation error.
-
-### UX Issues
-5. **No seek within paragraph** — the state tracks currentTime/duration but there's no scrub bar in the popup
-6. **No "read from here"** — always starts from paragraph 0. Should be able to right-click any paragraph and start reading from there
-7. **No progress indication when generating** — the popup shows "Generating..." but not which paragraph or how long it'll take
-8. **Voice change mid-read regenerates from scratch** — could pre-cache common voices
-9. **No way to see what's currently being read** — the popup shows paragraph text preview but you can't see which paragraph in the page
-10. **Speed change regenerates everything** — could use playbackRate as a quick-and-dirty option for small adjustments, or pre-generate at multiple speeds
-
-### Polish
-11. **No onboarding flow** — first-run experience needs to be smooth: pick a voice, hear a preview, understand the shortcut
-12. **No settings page** — model quality selection (fp32 vs q8), cache management, voice favorites
-13. **Error messages are generic** — "Failed on paragraph 22" doesn't tell the user what to do
-14. **No paragraph navigation** — can't skip to a specific paragraph or go back
+## Open / next
+- Speed change regenerates (cached after first time). Could pre-generate neighbors.
+- Non-English pages: phonemizer is English-only; no automatic voice/lang handling yet.
+- No per-site extraction tuning (some SPAs/Substack variants may need fallbacks).
+- Chrome Web Store assets/listing, onboarding page.
 
 ## Text Chunking (IMPLEMENTED)
 
@@ -149,10 +135,11 @@ The chunking algorithm in `offscreen.ts` handles Kokoro's 512-token limit:
 ```
 voicebox-extension/
 ├── src/
-│   ├── popup/popup.ts          # Popup UI logic
-│   ├── content/content.ts      # Article extraction (minimal)
-│   ├── background/background.ts # Service worker, message router
-│   └── offscreen/offscreen.ts  # TTS engine + audio playback
+│   ├── popup/popup.ts          # Popup UI (polls background for state)
+│   ├── content/content.ts      # Extraction + highlight + Alt+click (injected on demand)
+│   ├── background/background.ts # Lifecycle, routing, session recovery
+│   ├── offscreen/{offscreen,engine,cache}.ts # Player/session, Kokoro engine, IDB cache
+│   └── shared/                 # protocol, chunker, speech, voices (+ tests)
 ├── static/
 │   ├── manifest.json           # Chrome MV3 manifest
 │   ├── popup/popup.html        # Popup UI markup + styles
@@ -170,18 +157,10 @@ voicebox-extension/
 
 ## Message Protocol
 
-| Type | Direction | Data | Purpose |
-|------|-----------|------|---------|
-| `START_READING` | popup → background | - | Start reading current page |
-| `EXTRACT_ARTICLE` | background → content | - | Get article text |
-| `TTS_START` | background → offscreen | ArticleData | Start TTS + playback |
-| `TTS_PAUSE` | popup → offscreen | - | Pause playback |
-| `TTS_RESUME` | popup → offscreen | - | Resume playback |
-| `TTS_STOP` | popup → background → offscreen | - | Stop everything |
-| `TTS_SET_SPEED` | popup → offscreen | `{ speed: number }` | Change speed |
-| `TTS_SET_VOICE` | popup → offscreen | `{ voice: string }` | Change voice |
-| `TTS_GET_STATE` | popup → offscreen | - | Get current state |
-| `TTS_STATE_UPDATE` | offscreen → popup | TTSState | State broadcast |
+Typed in `src/shared/protocol.ts`. popup→background: `VB_START {mode}`, `VB_CMD {command}`, `VB_GET_STATE`, `VB_CLEAR_CACHE`;
+content→background: `VB_JUMP`. background→offscreen (tagged `target:'offscreen'`): `TTS_PING/START/COMMAND/GET_STATE/CLEAR_CACHE`.
+offscreen→background: `VB_EVENT {status|segment|finished}`. background→content: `VB_PING`, `EXTRACT_ARTICLE`, `VB_HIGHLIGHT`, `VB_HIGHLIGHT_CLEAR`.
+Commands: toggle/pause/resume/stop/next/prev/seek/jump/voice/speed.
 
 ## Dependencies
 

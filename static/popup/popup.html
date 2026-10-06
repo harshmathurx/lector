@@ -8,262 +8,366 @@
     * { margin: 0; padding: 0; box-sizing: border-box; }
 
     :root {
-      --bg: #0a0a0a;
-      --surface: rgba(255,255,255,0.04);
-      --surface-hover: rgba(255,255,255,0.08);
-      --border: rgba(255,255,255,0.06);
+      --bg: #0b0b0f;
+      --surface: rgba(255,255,255,0.045);
+      --surface-hover: rgba(255,255,255,0.09);
+      --border: rgba(255,255,255,0.08);
       --accent: #6366f1;
-      --accent-hover: #4f46e5;
-      --text: #e0e0e0;
-      --text-dim: #666;
-      --text-faint: #444;
-      --radius: 10px;
+      --accent-hover: #5558e6;
+      --accent-soft: rgba(99,102,241,0.16);
+      --accent-text: #a5b4fc;
+      --text: #ececf1;
+      --text-dim: #8b8b99;
+      --text-faint: #5a5a68;
+      --danger: #f87171;
+      --warn: #fbbf24;
+      --radius: 12px;
       --radius-sm: 8px;
-      --radius-pill: 20px;
     }
 
+    html, body { background: var(--bg); }
     body {
-      width: 380px;
+      width: 380px; min-height: 420px; position: relative; overflow: hidden;
       font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
-      background: var(--bg);
-      color: var(--text);
-      padding: 20px;
+      color: var(--text); -webkit-font-smoothing: antialiased;
     }
+    button { font-family: inherit; color: inherit; cursor: pointer; border: none; background: none; }
+    button:focus-visible, input:focus-visible { outline: 2px solid var(--accent-text); outline-offset: 2px; }
+    svg { display: block; fill: currentColor; }
+    .hidden { display: none !important; }
+
+    .main { padding: 18px 18px 16px; }
 
     /* ─── Header ─── */
-    .header {
-      display: flex; align-items: center; gap: 10px; margin-bottom: 20px;
-    }
+    .header { display: flex; align-items: center; gap: 10px; margin-bottom: 16px; }
     .logo {
-      width: 30px; height: 30px; border-radius: 8px;
-      background: linear-gradient(135deg, var(--accent), #8b5cf6);
+      width: 30px; height: 30px; border-radius: 9px; flex-shrink: 0;
+      background: linear-gradient(135deg, #6366f1, #a855f7);
       display: flex; align-items: center; justify-content: center;
-      font-size: 14px; font-weight: 700; color: white;
     }
-    .header h1 { font-size: 16px; font-weight: 700; color: #fff; }
-    .header p { font-size: 11px; color: var(--text-dim); }
+    .logo svg { width: 16px; height: 16px; }
+    .header h1 { font-size: 15px; font-weight: 700; letter-spacing: -0.01em; }
+    .header .sub { font-size: 11px; color: var(--text-dim); }
+    .icon-btn {
+      margin-left: auto; width: 30px; height: 30px; border-radius: 8px;
+      display: flex; align-items: center; justify-content: center; color: var(--text-dim);
+      transition: background .15s, color .15s;
+    }
+    .icon-btn:hover { background: var(--surface-hover); color: var(--text); }
+    .icon-btn svg { width: 18px; height: 18px; }
 
-    /* ─── Page info ─── */
-    .page-info {
-      font-size: 12px; color: var(--text-dim); line-height: 1.4;
-      padding: 10px 12px; background: var(--surface); border-radius: var(--radius-sm);
-      border-left: 2px solid var(--accent);
-      margin-bottom: 16px;
-      display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical;
-      overflow: hidden;
+    /* ─── Cards ─── */
+    .card {
+      background: var(--surface); border: 1px solid var(--border);
+      border-radius: var(--radius); padding: 11px 13px;
+    }
+    .page-title {
+      font-size: 13px; line-height: 1.4; font-weight: 500;
+      display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden;
+    }
+    .page-meta { font-size: 11px; color: var(--text-dim); margin-top: 3px; }
+
+    .label {
+      font-size: 10px; font-weight: 600; letter-spacing: .08em; text-transform: uppercase;
+      color: var(--text-faint); margin: 16px 0 7px;
     }
 
-    /* ─── Buttons ─── */
+    /* ─── Primary button ─── */
     .btn-primary {
-      width: 100%; padding: 12px; border-radius: var(--radius);
-      background: var(--accent); border: none; color: white;
-      font-size: 14px; font-weight: 600; cursor: pointer;
-      transition: all 0.15s ease;
-      box-shadow: 0 2px 8px rgba(99,102,241,0.3);
+      width: 100%; margin-top: 12px; padding: 13px; border-radius: var(--radius);
+      background: var(--accent); color: #fff; font-size: 14px; font-weight: 600;
+      display: flex; align-items: center; justify-content: center; gap: 8px;
+      box-shadow: 0 4px 16px rgba(99,102,241,.3); transition: background .15s, transform .1s;
     }
-    .btn-primary:hover { background: var(--accent-hover); transform: translateY(-1px); }
-    .btn-primary:active { transform: translateY(0); }
-    .btn-primary:disabled { background: #2a2a2a; color: #555; cursor: not-allowed; transform: none; box-shadow: none; }
+    .btn-primary:hover { background: var(--accent-hover); }
+    .btn-primary:active { transform: scale(.985); }
+    .btn-primary:disabled { background: #25252e; color: var(--text-faint); box-shadow: none; cursor: default; }
+    .btn-primary svg { width: 16px; height: 16px; }
 
-    .btn-secondary {
-      padding: 8px 16px; border-radius: var(--radius-sm);
-      background: var(--surface); border: 1px solid var(--border);
-      color: var(--text-dim); font-size: 12px; cursor: pointer;
-      transition: all 0.15s ease;
+    /* ─── Voice card ─── */
+    .voice-card {
+      width: 100%; display: flex; align-items: center; gap: 11px; text-align: left;
+      background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius);
+      padding: 9px 11px; transition: background .15s, border-color .15s;
     }
-    .btn-secondary:hover { background: var(--surface-hover); color: var(--text); }
-
-    /* ─── Section label ─── */
-    .section-label {
-      font-size: 10px; font-weight: 600; color: var(--text-faint);
-      text-transform: uppercase; letter-spacing: 0.8px;
-      margin-bottom: 8px; margin-top: 16px;
-    }
-    .section-label:first-of-type { margin-top: 0; }
-
-    /* ─── Voice rail ─── */
-    .voice-rail {
-      display: flex; gap: 6px; overflow-x: auto; padding-bottom: 4px;
-      scrollbar-width: none; -ms-overflow-style: none;
-    }
-    .voice-rail::-webkit-scrollbar { display: none; }
-
-    .voice-chip {
-      flex-shrink: 0; display: flex; align-items: center; gap: 6px;
-      padding: 6px 12px; border-radius: var(--radius-pill);
-      background: var(--surface); border: 1px solid var(--border);
-      color: var(--text-dim); font-size: 12px; font-weight: 500;
-      cursor: pointer; transition: all 0.15s ease; white-space: nowrap;
-    }
-    .voice-chip:hover { background: var(--surface-hover); color: var(--text); }
-    .voice-chip.selected {
-      background: rgba(99,102,241,0.15); border-color: var(--accent);
-      color: #818cf8;
-    }
-    .voice-chip .tag {
-      font-size: 9px; opacity: 0.5; font-weight: 600;
-    }
-    .voice-chip .preview-btn {
+    .voice-card:hover { background: var(--surface-hover); }
+    .avatar {
+      width: 32px; height: 32px; border-radius: 50%; flex-shrink: 0;
       display: flex; align-items: center; justify-content: center;
-      width: 18px; height: 18px; border-radius: 50%;
-      background: rgba(255,255,255,0.06); cursor: pointer;
-      transition: background 0.15s;
-      flex-shrink: 0;
+      font-size: 13px; font-weight: 700; color: #fff;
+      background: linear-gradient(135deg, var(--accent), #a855f7);
     }
-    .voice-chip .preview-btn:hover { background: rgba(255,255,255,0.15); }
-    .voice-chip .preview-btn svg { width: 10px; height: 10px; fill: currentColor; }
-    .voice-chip.previewing .preview-btn {
-      background: var(--accent); animation: pulse 1s ease infinite;
-    }
-    @keyframes pulse { 50% { opacity: 0.5; } }
+    .voice-card .info { min-width: 0; flex: 1; }
+    .voice-card .name { font-size: 13px; font-weight: 600; }
+    .voice-card .vibe { font-size: 11px; color: var(--text-dim); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .voice-card .chev { color: var(--text-faint); font-size: 12px; }
 
-    /* ─── Speed row ─── */
-    .speed-row {
-      display: flex; gap: 4px;
-    }
+    /* ─── Speed ─── */
+    .speed-row { display: flex; gap: 5px; }
     .speed-option {
-      flex: 1; padding: 6px; border-radius: var(--radius-sm);
+      flex: 1; padding: 7px 0; border-radius: var(--radius-sm); text-align: center;
       background: var(--surface); border: 1px solid var(--border);
-      color: var(--text-dim); font-size: 12px; font-weight: 600;
-      text-align: center; cursor: pointer; transition: all 0.15s;
+      font-size: 12px; font-weight: 600; color: var(--text-dim); transition: all .15s;
     }
     .speed-option:hover { background: var(--surface-hover); color: var(--text); }
-    .speed-option.selected {
-      background: rgba(99,102,241,0.15); border-color: var(--accent);
-      color: #818cf8;
-    }
+    .speed-option.selected { background: var(--accent-soft); border-color: var(--accent); color: var(--accent-text); }
 
-    /* ─── Player view ─── */
-    .player-status {
-      display: flex; align-items: center; gap: 8px; margin-bottom: 12px;
+    /* ─── Tips & banners ─── */
+    .tips { margin-top: 16px; display: grid; gap: 6px; }
+    .tip { font-size: 11px; color: var(--text-dim); line-height: 1.45; display: flex; gap: 8px; }
+    .tip kbd, .kbd {
+      background: var(--surface); border: 1px solid var(--border); border-radius: 4px;
+      padding: 1px 5px; font: 600 10px inherit; color: var(--text); white-space: nowrap;
     }
-    .status-dot {
-      width: 8px; height: 8px; border-radius: 50%;
-      background: var(--accent); flex-shrink: 0;
+    .banner {
+      margin-top: 12px; padding: 10px 12px; border-radius: var(--radius-sm);
+      background: var(--accent-soft); border: 1px solid rgba(99,102,241,.3);
+      font-size: 11.5px; line-height: 1.5; color: var(--accent-text);
     }
-    .status-dot.paused { background: #f59e0b; }
-    .status-dot.loading { background: #3b82f6; animation: pulse 1s ease infinite; }
-    .status-dot.error { background: #ef4444; }
-    .status-text { font-size: 13px; font-weight: 600; color: var(--text); }
-    .status-detail { font-size: 11px; color: var(--text-dim); margin-left: auto; }
-
-    .progress-track {
-      width: 100%; height: 3px; background: rgba(255,255,255,0.06);
-      border-radius: 2px; overflow: hidden; margin-bottom: 16px;
-    }
-    .progress-fill {
-      height: 100%; background: var(--accent); border-radius: 2px;
-      transition: width 0.3s ease; width: 0%;
-    }
-
-    .player-controls {
-      display: flex; align-items: center; justify-content: center;
-      gap: 12px; margin-bottom: 16px;
-    }
-    .btn-play {
-      width: 44px; height: 44px; border-radius: 50%;
-      background: var(--accent); border: none; color: white;
-      font-size: 18px; cursor: pointer;
-      display: flex; align-items: center; justify-content: center;
-      transition: all 0.15s;
-    }
-    .btn-play:hover { background: var(--accent-hover); transform: scale(1.05); }
-    .btn-play:active { transform: scale(0.95); }
-
-    .btn-stop {
-      width: 36px; height: 36px; border-radius: 50%;
-      background: var(--surface); border: 1px solid var(--border);
-      color: var(--text-dim); font-size: 14px; cursor: pointer;
-      display: flex; align-items: center; justify-content: center;
-      transition: all 0.15s;
-    }
-    .btn-stop:hover { background: rgba(239,68,68,0.15); border-color: #ef4444; color: #ef4444; }
-
-    /* ─── Now playing text ─── */
-    .now-playing {
-      font-size: 11px; color: var(--text-dim); line-height: 1.4;
-      padding: 8px 12px; background: var(--surface); border-radius: var(--radius-sm);
-      margin-bottom: 12px; font-style: italic;
-      display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical;
-      overflow: hidden;
-    }
-
-    /* ─── Keyboard hint ─── */
-    .shortcut-hint {
-      text-align: center; font-size: 10px; color: var(--text-faint);
-      margin-top: 16px;
-    }
-    .shortcut-hint kbd {
-      background: var(--surface); border: 1px solid var(--border);
-      border-radius: 4px; padding: 2px 5px;
-      font-size: 9px; font-family: inherit; color: var(--text-dim);
-    }
-
-    /* ─── Error ─── */
     .error-msg {
-      background: rgba(239,68,68,0.08); border: 1px solid rgba(239,68,68,0.2);
-      border-radius: var(--radius-sm); padding: 8px 12px;
-      font-size: 12px; color: #ef4444; margin-top: 12px; line-height: 1.4;
+      margin-top: 12px; padding: 10px 12px; border-radius: var(--radius-sm);
+      background: rgba(248,113,113,.09); border: 1px solid rgba(248,113,113,.25);
+      font-size: 12px; line-height: 1.45; color: var(--danger);
     }
 
-    .hidden { display: none !important; }
+    /* ─── Player ─── */
+    .status-row { display: flex; align-items: center; gap: 8px; margin: 14px 0 10px; }
+    .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--accent); flex-shrink: 0; }
+    .dot.paused { background: var(--warn); }
+    .dot.busy { background: #60a5fa; animation: pulse 1s ease infinite; }
+    .dot.error { background: var(--danger); }
+    @keyframes pulse { 50% { opacity: .35; } }
+    .status-text { font-size: 12px; font-weight: 600; }
+    .status-detail { margin-left: auto; font-size: 11px; color: var(--text-dim); }
+
+    .now-playing {
+      font-size: 12.5px; line-height: 1.55; color: var(--text); min-height: 4.6em;
+      display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden;
+    }
+
+    .seek { margin-top: 14px; }
+    input[type=range] {
+      -webkit-appearance: none; appearance: none; width: 100%; height: 18px; background: transparent; cursor: pointer;
+    }
+    input[type=range]::-webkit-slider-runnable-track {
+      height: 4px; border-radius: 2px;
+      background: linear-gradient(to right, var(--accent) var(--fill, 0%), rgba(255,255,255,.1) var(--fill, 0%));
+    }
+    input[type=range]::-webkit-slider-thumb {
+      -webkit-appearance: none; width: 12px; height: 12px; border-radius: 50%; margin-top: -4px;
+      background: #fff; box-shadow: 0 1px 4px rgba(0,0,0,.5); transition: transform .1s;
+    }
+    input[type=range]:hover::-webkit-slider-thumb { transform: scale(1.25); }
+    .times { display: flex; justify-content: space-between; font-size: 10.5px; color: var(--text-dim); font-variant-numeric: tabular-nums; margin-top: 2px; }
+
+    .controls { display: flex; align-items: center; justify-content: center; gap: 14px; margin: 12px 0 4px; }
+    .ctl {
+      width: 38px; height: 38px; border-radius: 50%; color: var(--text-dim);
+      display: flex; align-items: center; justify-content: center; transition: background .15s, color .15s;
+    }
+    .ctl:hover { background: var(--surface-hover); color: var(--text); }
+    .ctl svg { width: 20px; height: 20px; }
+    .ctl.stop:hover { background: rgba(248,113,113,.14); color: var(--danger); }
+    .ctl.play {
+      width: 54px; height: 54px; background: var(--accent); color: #fff;
+      box-shadow: 0 4px 16px rgba(99,102,241,.35);
+    }
+    .ctl.play:hover { background: var(--accent-hover); transform: scale(1.04); }
+    .ctl.play svg { width: 24px; height: 24px; }
+
+    .loadbar { height: 4px; border-radius: 2px; background: rgba(255,255,255,.1); overflow: hidden; margin-top: 10px; }
+    .loadbar > div { height: 100%; background: var(--accent); transition: width .3s; width: 0; }
+
+    /* ─── Sheets (voice picker, settings) ─── */
+    .sheet {
+      position: absolute; inset: 0; background: var(--bg); z-index: 10;
+      display: flex; flex-direction: column; animation: slide .18s ease;
+    }
+    @keyframes slide { from { transform: translateY(14px); opacity: 0; } }
+    .sheet-head { display: flex; align-items: center; gap: 8px; padding: 14px 14px 8px; }
+    .sheet-head h2 { font-size: 14px; font-weight: 700; flex: 1; }
+    .sheet-body { overflow-y: auto; padding: 0 14px 14px; flex: 1; max-height: 440px; }
+    .search {
+      width: 100%; padding: 9px 12px; border-radius: var(--radius-sm); font-size: 13px;
+      background: var(--surface); border: 1px solid var(--border); color: var(--text);
+    }
+    .tabs { display: flex; gap: 5px; margin: 10px 0 8px; flex-wrap: wrap; }
+    .tab {
+      white-space: nowrap; padding: 5px 11px; border-radius: 99px; font-size: 11.5px; font-weight: 600;
+      background: var(--surface); border: 1px solid var(--border); color: var(--text-dim);
+    }
+    .tab.selected { background: var(--accent-soft); border-color: var(--accent); color: var(--accent-text); }
+    .note { font-size: 11px; color: var(--text-dim); line-height: 1.45; margin: 4px 0 8px; }
+    .group-label { font-size: 10px; letter-spacing: .08em; text-transform: uppercase; color: var(--text-faint); font-weight: 600; margin: 10px 0 4px; }
+
+    .voice-row {
+      display: flex; align-items: center; gap: 10px; padding: 7px 8px; border-radius: 10px;
+      cursor: pointer; transition: background .12s;
+    }
+    .voice-row:hover { background: var(--surface); }
+    .voice-row.selected { background: var(--accent-soft); }
+    .voice-row .avatar { width: 28px; height: 28px; font-size: 12px; }
+    .voice-row .info { flex: 1; min-width: 0; }
+    .voice-row .name { font-size: 13px; font-weight: 600; display: flex; align-items: center; gap: 6px; }
+    .voice-row .tag { font-size: 9.5px; font-weight: 700; color: var(--text-dim); background: var(--surface-hover); padding: 1px 5px; border-radius: 4px; }
+    .voice-row .vibe { font-size: 11px; color: var(--text-dim); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .row-btn {
+      width: 28px; height: 28px; border-radius: 50%; flex-shrink: 0; color: var(--text-dim);
+      display: flex; align-items: center; justify-content: center; transition: background .12s, color .12s;
+    }
+    .row-btn:hover { background: var(--surface-hover); color: var(--text); }
+    .row-btn svg { width: 15px; height: 15px; }
+    .row-btn.fav.on { color: var(--warn); }
+    .row-btn.previewing { background: var(--accent); color: #fff; animation: pulse 1s ease infinite; }
+
+    .setting { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 12px 0; border-bottom: 1px solid var(--border); }
+    .setting .t { font-size: 13px; font-weight: 600; }
+    .setting .d { font-size: 11px; color: var(--text-dim); margin-top: 2px; line-height: 1.4; }
+    .btn-secondary {
+      padding: 7px 12px; border-radius: var(--radius-sm); background: var(--surface);
+      border: 1px solid var(--border); font-size: 12px; font-weight: 600; white-space: nowrap;
+    }
+    .btn-secondary:hover { background: var(--surface-hover); }
   </style>
 </head>
 <body>
-  <div class="header">
-    <div class="logo">V</div>
-    <div>
-      <h1>Voicebox</h1>
-      <p>Read any article aloud</p>
+  <div class="main">
+    <div class="header">
+      <div class="logo">
+        <svg viewBox="0 0 24 24" fill="#fff"><path d="M4 10v4h2V10H4zm4-3v10h2V7H8zm4-4v18h2V3h-2zm4 4v10h2V7h-2zm4 3v4h2v-4h-2z"/></svg>
+      </div>
+      <div>
+        <h1>Voicebox</h1>
+        <div class="sub">Listen to any page</div>
+      </div>
+      <button class="icon-btn" id="btn-settings" aria-label="Settings" title="Settings">
+        <svg viewBox="0 0 24 24"><path d="M19.14 12.94a7.07 7.07 0 000-1.88l2.03-1.58a.5.5 0 00.12-.64l-1.92-3.32a.5.5 0 00-.6-.22l-2.39.96a7 7 0 00-1.62-.94l-.36-2.54a.5.5 0 00-.5-.42h-3.84a.5.5 0 00-.5.42l-.36 2.54a7 7 0 00-1.62.94l-2.39-.96a.5.5 0 00-.6.22L2.7 8.84a.5.5 0 00.12.64l2.03 1.58a7.07 7.07 0 000 1.88L2.82 14.52a.5.5 0 00-.12.64l1.92 3.32c.13.22.39.3.6.22l2.39-.96c.5.38 1.04.7 1.62.94l.36 2.54c.04.24.25.42.5.42h3.84c.25 0 .46-.18.5-.42l.36-2.54a7 7 0 001.62-.94l2.39.96c.22.09.47 0 .6-.22l1.92-3.32a.5.5 0 00-.12-.64l-2.03-1.58zM12 15.6A3.6 3.6 0 1112 8.4a3.6 3.6 0 010 7.2z"/></svg>
+      </button>
+    </div>
+
+    <!-- Idle -->
+    <div id="idle-view">
+      <div class="card">
+        <div class="page-title" id="page-title">Loading page…</div>
+      </div>
+
+      <button class="btn-primary" id="btn-start">
+        <svg viewBox="0 0 24 24"><path d="M8 5v14l11-7z"/></svg>
+        <span id="btn-start-label">Listen to this page</span>
+      </button>
+
+      <div class="label">Voice</div>
+      <button class="voice-card" data-open-voices>
+        <div class="avatar" data-voice-avatar></div>
+        <div class="info"><div class="name" data-voice-name></div><div class="vibe" data-voice-vibe></div></div>
+        <span class="chev">Change ›</span>
+      </button>
+
+      <div class="label">Speed</div>
+      <div class="speed-row" data-speed-row></div>
+
+      <div id="first-run" class="banner hidden">
+        <strong>First time?</strong> Your first listen downloads the voice model once. After that, Voicebox works offline and nothing you read ever leaves your computer.
+      </div>
+
+      <div class="tips">
+        <div class="tip"><span><kbd>Alt</kbd>+<kbd>Shift</kbd>+<kbd>R</kbd></span><span>Start or pause from any tab</span></div>
+        <div class="tip"><span><kbd>Right-click</kbd></span><span>Select text, then <b>Read aloud from here</b></span></div>
+      </div>
+    </div>
+
+    <!-- Player -->
+    <div id="player-view" class="hidden">
+      <div class="card"><div class="page-title" id="player-title"></div></div>
+
+      <div class="status-row">
+        <div class="dot" id="dot"></div>
+        <div class="status-text" id="status-text"></div>
+        <div class="status-detail" id="status-detail"></div>
+      </div>
+
+      <div id="load-block" class="hidden">
+        <div class="loadbar"><div id="load-fill"></div></div>
+        <div class="note" style="margin-top:8px" id="load-note"></div>
+      </div>
+
+      <div id="play-block">
+        <div class="now-playing" id="now-playing"></div>
+
+        <div class="seek">
+          <input type="range" id="seek" min="0" max="1000" value="0" aria-label="Position in article">
+          <div class="times"><span id="t-elapsed">0:00</span><span id="t-remaining"></span></div>
+        </div>
+
+        <div class="controls">
+          <button class="ctl stop" id="btn-stop" aria-label="Stop" title="Stop">
+            <svg viewBox="0 0 24 24"><rect x="6" y="6" width="12" height="12" rx="2"/></svg>
+          </button>
+          <button class="ctl" id="btn-prev" aria-label="Previous paragraph" title="Previous paragraph (←)">
+            <svg viewBox="0 0 24 24"><path d="M6 6h2v12H6zm3.5 6l8.5 6V6z"/></svg>
+          </button>
+          <button class="ctl play" id="btn-play" aria-label="Play or pause" title="Play / pause (Space)"></button>
+          <button class="ctl" id="btn-next" aria-label="Next paragraph" title="Next paragraph (→)">
+            <svg viewBox="0 0 24 24"><path d="M6 18l8.5-6L6 6zM16 6h2v12h-2z"/></svg>
+          </button>
+          <span style="width:38px"></span>
+        </div>
+      </div>
+
+      <div class="label">Voice</div>
+      <button class="voice-card" data-open-voices>
+        <div class="avatar" data-voice-avatar></div>
+        <div class="info"><div class="name" data-voice-name></div><div class="vibe" data-voice-vibe></div></div>
+        <span class="chev">Change ›</span>
+      </button>
+
+      <div class="label">Speed</div>
+      <div class="speed-row" data-speed-row></div>
+    </div>
+
+    <div id="error" class="error-msg hidden"></div>
+  </div>
+
+  <!-- Voice picker -->
+  <div class="sheet hidden" id="voice-sheet">
+    <div class="sheet-head">
+      <h2>Choose a voice</h2>
+      <button class="icon-btn" id="close-voices" aria-label="Close"><svg viewBox="0 0 24 24"><path d="M19 6.4L17.6 5 12 10.6 6.4 5 5 6.4 10.6 12 5 17.6 6.4 19 12 13.4 17.6 19 19 17.6 13.4 12z"/></svg></button>
+    </div>
+    <div class="sheet-body">
+      <input class="search" id="voice-search" placeholder="Search voices" aria-label="Search voices">
+      <div class="tabs" id="voice-tabs"></div>
+      <div id="voice-list"></div>
     </div>
   </div>
 
-  <!-- Idle view -->
-  <div id="idle-view">
-    <div class="page-info" id="page-title">Loading page...</div>
-
-    <button class="btn-primary" id="btn-start">Read Aloud</button>
-
-    <div class="section-label">Voice</div>
-    <div class="voice-rail" id="idle-voice-rail"></div>
-
-    <div class="section-label">Speed</div>
-    <div class="speed-row" id="idle-speed-row"></div>
-
-    <div class="shortcut-hint">
-      <kbd>Alt+Shift+R</kbd> to read from anywhere
+  <!-- Settings -->
+  <div class="sheet hidden" id="settings-sheet">
+    <div class="sheet-head">
+      <h2>Settings</h2>
+      <button class="icon-btn" id="close-settings" aria-label="Close"><svg viewBox="0 0 24 24"><path d="M19 6.4L17.6 5 12 10.6 6.4 5 5 6.4 10.6 12 5 17.6 6.4 19 12 13.4 17.6 19 19 17.6 13.4 12z"/></svg></button>
     </div>
-  </div>
-
-  <!-- Player view -->
-  <div id="player-view" class="hidden">
-    <div class="player-status">
-      <div class="status-dot" id="status-dot"></div>
-      <div class="status-text" id="status-text">Playing</div>
-      <div class="status-detail" id="status-detail"></div>
+    <div class="sheet-body">
+      <div class="setting">
+        <div><div class="t">Saved audio</div><div class="d" id="cache-note">Voicebox remembers what it has already voiced so repeat listens are instant.</div></div>
+        <button class="btn-secondary" id="btn-clear-cache">Clear</button>
+      </div>
+      <div class="setting">
+        <div><div class="t">Shortcuts</div>
+          <div class="d" style="line-height:2">
+            <span class="kbd">Alt+Shift+R</span> start / pause<br>
+            <span class="kbd">Alt+Shift+→</span> next paragraph<br>
+            <span class="kbd">Alt+Shift+←</span> previous paragraph<br>
+            <span class="kbd">Alt+Click</span> a paragraph to read from there
+          </div>
+          <div class="d" style="margin-top:6px">Change them at chrome://extensions/shortcuts</div>
+        </div>
+      </div>
+      <div class="setting">
+        <div><div class="t">Privacy</div><div class="d">Voices run on your device. No account, no server, and no page content is ever sent anywhere. The voice model is downloaded once from Hugging Face.</div></div>
+      </div>
+      <div class="setting" style="border:none"><div><div class="t">Engine</div><div class="d" id="engine-note">Not started yet</div></div></div>
     </div>
-
-    <div class="progress-track">
-      <div class="progress-fill" id="progress-fill"></div>
-    </div>
-
-    <div class="now-playing" id="now-playing"></div>
-
-    <div class="player-controls">
-      <button class="btn-stop" id="btn-stop" title="Stop">&#x2715;</button>
-      <button class="btn-play" id="btn-play" title="Play/Pause">&#x25B6;</button>
-    </div>
-
-    <div class="section-label">Voice</div>
-    <div class="voice-rail" id="playing-voice-rail"></div>
-
-    <div class="section-label">Speed</div>
-    <div class="speed-row" id="playing-speed-row"></div>
-  </div>
-
-  <!-- Error -->
-  <div id="error-container" class="hidden">
-    <div class="error-msg" id="error-message"></div>
   </div>
 
   <script type="module" src="popup.js"></script>

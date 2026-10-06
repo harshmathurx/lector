@@ -1,1156 +1,548 @@
-// Offscreen document — runs Kokoro TTS engine and plays audio.
-// The only context with Web Audio API access in MV3.
-
-console.log('[VB] Offscreen document starting...');
-
-// ─── ONNX/WASM Setup (must be first — before kokoro-js import) ─────────────
-
-import { env as ortEnv } from 'onnxruntime-web';
-
-const wasmBaseUrl = chrome.runtime.getURL('wasm/');
-ortEnv.wasm.wasmPaths = {
-  mjs: `${wasmBaseUrl}ort-wasm-simd-threaded.jsep.mjs`,
-  wasm: `${wasmBaseUrl}ort-wasm-simd-threaded.jsep.wasm`,
-} as never;
-
-import { KokoroTTS } from 'kokoro-js';
-
-console.log('[VB] Imports loaded successfully');
-
-// ─── Types ──────────────────────────────────────────────────────────────────
-
-interface ArticleData {
-  title: string;
-  paragraphs: string[];
-  url: string;
-  voice?: string;
-  speed?: number;
-}
-
-interface TTSState {
-  status: 'idle' | 'loading' | 'generating' | 'playing' | 'paused' | 'error';
-  progress: number;
-  currentParagraph: number;
-  totalParagraphs: number;
-  voice: string;
-  speed: number;
-  title: string;
-  currentTime: number;
-  duration: number;
-  paragraphText: string;
-  error?: string;
-}
-
-// ─── Voice Display Names (for preview clips) ────────────────────────────────
-
-const VOICE_NAMES: Record<string, string> = {
-  // American English
-  af_heart: 'Heart', af_alloy: 'Alloy', af_aoede: 'Aoede', af_bella: 'Bella',
-  af_jessica: 'Jessica', af_kore: 'Kore', af_nicole: 'Nicole', af_nova: 'Nova',
-  af_river: 'River', af_sarah: 'Sarah', af_sky: 'Sky',
-  am_adam: 'Adam', am_echo: 'Echo', am_eric: 'Eric', am_fenrir: 'Fenrir',
-  am_liam: 'Liam', am_michael: 'Michael', am_onyx: 'Onyx', am_puck: 'Puck',
-  am_santa: 'Santa',
-  // British English
-  bf_alice: 'Alice', bf_emma: 'Emma', bf_isabella: 'Isabella', bf_lily: 'Lily',
-  bm_daniel: 'Daniel', bm_fable: 'Fable', bm_george: 'George', bm_lewis: 'Lewis',
-  // Japanese
-  jf_alpha: 'Alpha', jf_gongitsune: 'Gongitsune', jf_nezumi: 'Nezumi',
-  jf_tebukuro: 'Tebukuro', jm_kumo: 'Kumo',
-  // Mandarin Chinese
-  zf_xiaobei: 'Xiaobei', zf_xiaoni: 'Xiaoni', zf_xiaoxiao: 'Xiaoxiao',
-  zf_xiaoyi: 'Xiaoyi', zm_yunjian: 'Yunjian', zm_yunxi: 'Yunxi',
-  zm_yunxia: 'Yunxia', zm_yunyang: 'Yunyang',
-  // Spanish
-  ef_dora: 'Dora', em_alex: 'Alex', em_santa: 'Santa',
-  // French
-  ff_siwis: 'Siwis',
-  // Hindi
-  hf_alpha: 'Alpha', hf_beta: 'Beta', hm_omega: 'Omega', hm_psi: 'Psi',
-  // Italian
-  if_sara: 'Sara', im_nicola: 'Nicola',
-  // Brazilian Portuguese
-  pf_dora: 'Dora', pm_alex: 'Alex', pm_santa: 'Santa',
-};
-
-// ─── IndexedDB Audio Cache ──────────────────────────────────────────────────
-
-const DB_NAME = 'voicebox-reader';
-const DB_VERSION = 1;
-const STORE_NAME = 'audio-cache';
-const MAX_CACHE_AGE_MS = 24 * 60 * 60 * 1000; // 24 hours
-const MAX_CACHE_ENTRIES = 200;
-
-function openDB(): Promise<IDBDatabase> {
-  return new Promise((resolve, reject) => {
-    const req = indexedDB.open(DB_NAME, DB_VERSION);
-    req.onupgradeneeded = () => {
-      const db = req.result;
-      if (!db.objectStoreNames.contains(STORE_NAME)) {
-        const store = db.createObjectStore(STORE_NAME, { keyPath: 'key' });
-        store.createIndex('timestamp', 'timestamp', { unique: false });
-      }
-    };
-    req.onsuccess = () => resolve(req.result);
-    req.onerror = () => reject(req.error);
-  });
-}
-
-function cacheKey(text: string, voice: string, speed: number): string {
-  return `${voice}:${speed}:${text.length}:${text.substring(0, 200)}`;
-}
-
-async function getCachedAudio(key: string): Promise<Float32Array | null> {
-  try {
-    const db = await openDB();
-    return new Promise((resolve) => {
-      const tx = db.transaction(STORE_NAME, 'readonly');
-      const store = tx.objectStore(STORE_NAME);
-      const req = store.get(key);
-      req.onsuccess = () => {
-        const entry = req.result;
-        if (entry && Date.now() - entry.timestamp < MAX_CACHE_AGE_MS) {
-          resolve(new Float32Array(entry.audio));
-        } else {
-          resolve(null);
-        }
-      };
-      req.onerror = () => resolve(null);
-    });
-  } catch {
-    return null;
-  }
-}
-
-async function setCachedAudio(key: string, audio: Float32Array): Promise<void> {
-  try {
-    const db = await openDB();
-    const tx = db.transaction(STORE_NAME, 'readwrite');
-    const store = tx.objectStore(STORE_NAME);
-    store.put({ key, audio: Array.from(audio), timestamp: Date.now() });
-
-    // Evict old entries if cache is too big
-    const countReq = store.count();
-    countReq.onsuccess = () => {
-      if (countReq.result > MAX_CACHE_ENTRIES) {
-        const index = store.index('timestamp');
-        const cursor = index.openCursor();
-        let toDelete = countReq.result - MAX_CACHE_ENTRIES + 20; // batch delete
-        cursor.onsuccess = () => {
-          if (cursor.result && toDelete > 0) {
-            cursor.result.delete();
-            toDelete--;
-            cursor.result.continue();
-          }
-        };
-      }
-    };
-  } catch {
-    // Cache write failure is non-fatal
-  }
-}
-
-// ─── Settings Persistence ───────────────────────────────────────────────────
-
-let defaultVoice = 'af_heart';
-let defaultSpeed = 1.0;
-
-// Load saved settings. Deferred because chrome.storage may not be available
-// at module evaluation time in offscreen documents.
-function loadSettings(): void {
-  try {
-    chrome.storage.local.get(['defaultVoice', 'defaultSpeed'], (result) => {
-      if (typeof result.defaultVoice === 'string' && result.defaultVoice) {
-        defaultVoice = result.defaultVoice;
-        state.voice = defaultVoice;
-      }
-      if (typeof result.defaultSpeed === 'number' && result.defaultSpeed > 0) {
-        defaultSpeed = result.defaultSpeed;
-        state.speed = defaultSpeed;
-      }
-    });
-  } catch (e) {
-    console.warn('[VB] Could not load settings:', e);
-  }
-}
-
-// ─── State ──────────────────────────────────────────────────────────────────
-
-let tts: KokoroTTS | null = null;
-let audioContext: AudioContext | null = null;
-let currentSource: AudioBufferSourceNode | null = null;
-let gainNode: GainNode | null = null;
-let state: TTSState = {
-  status: 'idle',
-  progress: 0,
-  currentParagraph: 0,
-  totalParagraphs: 0,
-  voice: defaultVoice,
-  speed: defaultSpeed,
-  title: '',
-  currentTime: 0,
-  duration: 0,
-  paragraphText: '',
-};
-
-let paragraphs: string[] = [];
-let audioQueue: (AudioBuffer | null)[] = [];
-let isPlaying = false;
-let isPaused = false;
-let currentParagraphIndex = 0;
-let playbackStartTime = 0; // AudioContext.currentTime value at the moment playback started (minus offset)
-let pausedAt = 0; // Offset (seconds, audio-rate) into the current buffer when paused
-let currentBuffer: AudioBuffer | null = null; // Buffer for the paragraph currently playing/paused — used by seek
-let playbackGeneration = 0; // Increments on stop/skip to cancel stale playback
-let timeUpdateTimer: ReturnType<typeof setInterval> | null = null; // 250ms ticker broadcasting time updates
-
-let downloadFiles = new Map<string, number>();
-let downloadTotalFiles = 0;
-
-// ─── Audio Context ──────────────────────────────────────────────────────────
-
-function getAudioContext(): AudioContext {
-  if (!audioContext) {
-    // Use default sample rate (usually 44100 or 48000) — NOT 24000.
-    audioContext = new AudioContext();
-    gainNode = audioContext.createGain();
-    gainNode.connect(audioContext.destination);
-    console.log('[VB] AudioContext created, state:', audioContext.state, 'sampleRate:', audioContext.sampleRate);
-  }
-  if (audioContext.state === 'suspended') {
-    audioContext.resume();
-  }
-  return audioContext;
-}
-
-function ctx_sampleRate(): number {
-  return audioContext?.sampleRate || 48000;
-}
-
-// ─── TTS Engine ─────────────────────────────────────────────────────────────
-
-async function initTTS(
-  onProgress: (progress: number) => void
-): Promise<KokoroTTS> {
-  if (tts) return tts;
-
-  const modelId = 'onnx-community/Kokoro-82M-v1.0-ONNX';
-
-  downloadFiles.clear();
-  downloadTotalFiles = 0;
-
-  const progressCallback = (progress: {
-    status: string;
-    progress?: number;
-    file?: string;
-  }) => {
-    if (progress.status === 'progress' && progress.file) {
-      downloadFiles.set(progress.file, progress.progress || 0);
-      if (downloadFiles.size > downloadTotalFiles) {
-        downloadTotalFiles = downloadFiles.size;
-      }
-      let sum = 0;
-      for (const v of downloadFiles.values()) sum += v;
-      const overall = sum / Math.max(downloadTotalFiles, 1) / 100;
-      onProgress(Math.min(overall, 0.99));
-    } else if (progress.status === 'ready') {
-      onProgress(1.0);
-    }
-  };
-
-  let device: 'webgpu' | 'wasm' = 'webgpu';
-  let dtype: 'fp32' | 'q8' = 'fp32';
-
-  if (!navigator.gpu) {
-    device = 'wasm';
-    dtype = 'q8';
-  }
-
-  try {
-    tts = await KokoroTTS.from_pretrained(modelId, {
-      dtype,
-      device,
-      progress_callback: progressCallback,
-    });
-  } catch (e) {
-    console.warn('WebGPU failed, falling back to WASM:', e);
-    device = 'wasm';
-    dtype = 'q8';
-    downloadFiles.clear();
-    downloadTotalFiles = 0;
-    tts = await KokoroTTS.from_pretrained(modelId, {
-      dtype,
-      device,
-      progress_callback: progressCallback,
-    });
-  }
-
-  return tts;
-}
-
-// ─── Text Chunking for TTS ─────────────────────────────────────────────────
-// Kokoro has a 512 phoneme token limit. Long text must be split into chunks.
-// The chunking quality directly determines whether the output sounds natural
-// or robotic. Rules:
+// Offscreen document: owns the TTS session and audio playback.
 //
-// 1. Split at sentence boundaries (. ! ? …) — the model adds natural pauses
-// 2. If a sentence is too long, split at clause boundaries (, ; : — –)
-// 3. Last resort: split at conjunctions (and, but, or, which, that, because)
-// 4. NEVER split: mid-word, mid-quote, inside parentheses, inside URLs/emails
-// 5. Each chunk must END with its punctuation mark
-// 6. Between concatenated chunks, insert silence proportional to the boundary type
+// This file must stay tiny to evaluate. It registers its message listener
+// first; the 5MB model stack is lazy-loaded by engine.ts when a session starts,
+// so a load failure shows up as an error state rather than a dead document.
 
-// Silence durations in samples at 24kHz (Kokoro's output rate)
-const SILENCE_SENTENCE = 6000;   // 250ms — between sentences
-const SILENCE_CLAUSE = 3600;     // 150ms — between clauses
-const SILENCE_PARAGRAPH = 9600;  // 400ms — between paragraphs
+import type {
+  Article,
+  Command,
+  OffscreenEvent,
+  OffscreenRequest,
+  PlayerState,
+  Status,
+} from '../shared/protocol';
+import { IDLE_STATE } from '../shared/protocol';
+import { chunkParagraph } from '../shared/chunker';
+import { prepareForSpeech } from '../shared/speech';
+import { cacheClear, cacheGet, cacheKey, cachePut } from './cache';
+import { engineDevice, ensureEngine, isEngineReady, synthesize } from './engine';
 
-interface TextChunk {
+// ─── Types & state ──────────────────────────────────────────────────────────
+
+interface Segment {
+  para: number;
+  start: number;
+  end: number;
   text: string;
-  /** Silence to insert AFTER this chunk (in samples at 24kHz) */
-  pauseAfter: number;
+  speech: string;
+  pauseMs: number;
+  chars: number;
+  /** Characters of the article before this segment. */
+  cumChars: number;
 }
 
-/**
- * Split text into chunks suitable for Kokoro's 512-token limit.
- * Preserves natural prosody by respecting punctuation boundaries.
- */
-function chunkText(text: string, maxLength: number = 400): TextChunk[] {
-  if (text.length <= maxLength) {
-    return [{ text, pauseAfter: SILENCE_PARAGRAPH }];
-  }
+const LOOKAHEAD = 4; // segments generated ahead of the playhead
+const KEEP_BEHIND = 2; // decoded buffers kept behind the playhead
+const MODEL_RATE = 24000;
+const DEFAULT_SEC_PER_CHAR = 1 / 15;
+const MAX_CONSECUTIVE_FAILURES = 3;
 
-  const chunks: TextChunk[] = [];
+let article: Article | null = null;
+let segments: Segment[] = [];
+let totalChars = 0;
+let voice = 'af_heart';
+let speed = 1;
 
-  // Step 1: Split into sentences (keeping the punctuation)
-  // Match: anything followed by sentence-ending punctuation + optional quote/paren
-  const sentenceRegex = /[^.!?…]*[.!?…]+[\]'"»)〕】」』]*\s*/g;
-  const sentences: string[] = [];
-  let match;
-  while ((match = sentenceRegex.exec(text)) !== null) {
-    const s = match[0].trim();
-    if (s.length > 0) sentences.push(s);
-  }
-  // If regex didn't split (no sentence-ending punctuation), treat as one sentence
-  if (sentences.length === 0) {
-    sentences.push(text);
-  }
-  // Handle any remaining text after last sentence
-  const lastSentence = sentences[sentences.length - 1];
-  const lastIndex = text.lastIndexOf(lastSentence) + lastSentence.length;
-  if (lastIndex < text.length) {
-    const remainder = text.substring(lastIndex).trim();
-    if (remainder.length > 0) {
-      sentences.push(remainder);
-    }
-  }
+let status: Status = 'idle';
+let errorMessage: string | undefined;
+let loadProgress = 0;
 
-  // Step 2: Pack sentences into chunks
-  let current = '';
-  for (const sentence of sentences) {
-    if (sentence.length > maxLength) {
-      // Sentence itself is too long — split at clause boundaries
-      if (current.trim()) {
-        chunks.push({ text: current.trim(), pauseAfter: SILENCE_SENTENCE });
-        current = '';
+let playIdx = 0;
+let playOffset = 0; // seconds into the current buffer (valid when not playing)
+let lastEmittedIdx = -1;
+
+const buffers = new Map<number, AudioBuffer | 'failed'>();
+let epoch = 0; // bumps when buffers become invalid (voice/speed change, new session)
+let sessionId = 0; // bumps on every start/stop
+let consecutiveFailures = 0;
+let secPerChar = DEFAULT_SEC_PER_CHAR;
+
+let ctx: AudioContext | null = null;
+let gain: GainNode | null = null;
+let source: AudioBufferSourceNode | null = null;
+let startedAt = 0; // ctx.currentTime corresponding to buffer offset 0
+
+// ─── Events to background ───────────────────────────────────────────────────
+
+function send(event: OffscreenEvent): void {
+  chrome.runtime.sendMessage(event).catch(() => {});
+}
+
+function setStatus(next: Status, error?: string): void {
+  errorMessage = next === 'error' ? error : undefined;
+  if (status === next && next !== 'error') return;
+  status = next;
+  send({ type: 'VB_EVENT', kind: 'status', status: next, error: errorMessage });
+  updateMediaSession();
+}
+
+function emitSegment(): void {
+  if (lastEmittedIdx === playIdx) return;
+  lastEmittedIdx = playIdx;
+  const seg = segments[playIdx];
+  if (seg) {
+    send({ type: 'VB_EVENT', kind: 'segment', paraIndex: seg.para, start: seg.start, end: seg.end });
+  }
+}
+
+// ─── Audio ──────────────────────────────────────────────────────────────────
+
+function getCtx(): AudioContext {
+  if (!ctx) {
+    ctx = new AudioContext();
+    gain = ctx.createGain();
+    gain.connect(ctx.destination);
+  }
+  if (ctx.state === 'suspended') void ctx.resume();
+  return ctx;
+}
+
+const FADE_SAMPLES = 72; // 3ms at 24kHz, removes clicks at segment edges
+
+function toBuffer(samples: Float32Array, rate: number, pauseMs: number): AudioBuffer {
+  const c = getCtx();
+  const silence = Math.round((pauseMs / 1000) * rate);
+  const buf = c.createBuffer(1, samples.length + silence, rate);
+  const data = buf.getChannelData(0);
+  data.set(samples);
+  const n = Math.min(FADE_SAMPLES, samples.length >> 1);
+  for (let i = 0; i < n; i++) {
+    const g = i / n;
+    data[i] *= g;
+    data[samples.length - 1 - i] *= g;
+  }
+  return buf;
+}
+
+async function synth(seg: Segment, v: string, s: number): Promise<AudioBuffer> {
+  const key = await cacheKey(seg.speech, v, s);
+  let samples = await cacheGet(key);
+  let rate = MODEL_RATE;
+  if (!samples) {
+    const out = await synthesize(seg.speech, v, s);
+    samples = out.samples;
+    rate = out.sampleRate;
+    void cachePut(key, samples);
+  }
+  const seconds = samples.length / rate;
+  secPerChar = secPerChar === DEFAULT_SEC_PER_CHAR
+    ? seconds / seg.chars
+    : secPerChar * 0.7 + (seconds / seg.chars) * 0.3;
+  return toBuffer(samples, rate, seg.pauseMs);
+}
+
+// ─── Generation pump ────────────────────────────────────────────────────────
+
+let pumping = false;
+let pumpAgain = false;
+
+function nextToGenerate(): number {
+  const last = Math.min(playIdx + LOOKAHEAD, segments.length - 1);
+  for (let i = playIdx; i <= last; i++) if (!buffers.has(i)) return i;
+  return -1;
+}
+
+async function pump(): Promise<void> {
+  if (pumping) {
+    pumpAgain = true;
+    return;
+  }
+  pumping = true;
+  try {
+    do {
+      pumpAgain = false;
+      for (;;) {
+        const idx = nextToGenerate();
+        if (idx === -1 || !isEngineReady()) break;
+        const myEpoch = epoch;
+        const mySession = sessionId;
+        const seg = segments[idx];
+        let result: AudioBuffer | 'failed';
+        try {
+          result = await synth(seg, voice, speed);
+          consecutiveFailures = 0;
+        } catch (e) {
+          console.error('[VB] Segment generation failed:', idx, e);
+          result = 'failed';
+          consecutiveFailures++;
+        }
+        if (mySession !== sessionId || myEpoch !== epoch) break; // stale; restart scan
+        buffers.set(idx, result);
+        if (consecutiveFailures >= MAX_CONSECUTIVE_FAILURES) {
+          fail('The voice engine kept failing on this page. Try a different voice, or reload the page and try again.');
+          return;
+        }
+        if (!source) tryPlay();
       }
-      const clauseChunks = splitLongSentence(sentence, maxLength);
-      chunks.push(...clauseChunks);
-      continue;
-    }
-
-    if ((current + ' ' + sentence).length > maxLength && current.trim()) {
-      chunks.push({ text: current.trim(), pauseAfter: SILENCE_SENTENCE });
-      current = sentence;
-    } else {
-      current = current ? current + ' ' + sentence : sentence;
-    }
+    } while (pumpAgain);
+  } finally {
+    pumping = false;
   }
-  if (current.trim()) {
-    chunks.push({ text: current.trim(), pauseAfter: SILENCE_PARAGRAPH });
-  }
-
-  // Fix the last chunk's pause
-  if (chunks.length > 0) {
-    chunks[chunks.length - 1].pauseAfter = SILENCE_PARAGRAPH;
-  }
-
-  return chunks;
 }
 
-/**
- * Split a sentence that's too long at clause boundaries.
- * Tries commas, semicolons, colons, dashes first. Falls back to
- * conjunctions. Last resort: hard split at word boundary.
- */
-function splitLongSentence(sentence: string, maxLength: number): TextChunk[] {
-  if (sentence.length <= maxLength) {
-    return [{ text: sentence, pauseAfter: SILENCE_SENTENCE }];
-  }
-
-  const chunks: TextChunk[] = [];
-
-  // Try splitting at clause boundaries: , ; : — –
-  // Keep the punctuation with the preceding text
-  const clauseRegex = /[^,;:—–]+[,;:—–]?\s*/g;
-  const clauses: string[] = [];
-  let match;
-  while ((match = clauseRegex.exec(sentence)) !== null) {
-    const c = match[0].trim();
-    if (c.length > 0) clauses.push(c);
-  }
-  if (clauses.length === 0) clauses.push(sentence);
-
-  let current = '';
-  for (const clause of clauses) {
-    if (clause.length > maxLength) {
-      // Even a single clause is too long — split at word boundaries
-      if (current.trim()) {
-        chunks.push({ text: current.trim(), pauseAfter: SILENCE_CLAUSE });
-        current = '';
-      }
-      const wordChunks = splitAtWords(clause, maxLength);
-      chunks.push(...wordChunks);
-      continue;
-    }
-
-    if ((current + ' ' + clause).length > maxLength && current.trim()) {
-      chunks.push({ text: current.trim(), pauseAfter: SILENCE_CLAUSE });
-      current = clause;
-    } else {
-      current = current ? current + ' ' + clause : clause;
-    }
-  }
-  if (current.trim()) {
-    chunks.push({ text: current.trim(), pauseAfter: SILENCE_SENTENCE });
-  }
-
-  return chunks;
-}
-
-/**
- * Last resort: split at word boundaries. Preserves whole words.
- */
-function splitAtWords(text: string, maxLength: number): TextChunk[] {
-  const words = text.split(/\s+/);
-  const chunks: TextChunk[] = [];
-  let current = '';
-
-  for (const word of words) {
-    if ((current + ' ' + word).length > maxLength && current.trim()) {
-      chunks.push({ text: current.trim(), pauseAfter: SILENCE_CLAUSE });
-      current = word;
-    } else {
-      current = current ? current + ' ' + word : word;
-    }
-  }
-  if (current.trim()) {
-    chunks.push({ text: current.trim(), pauseAfter: SILENCE_SENTENCE });
-  }
-
-  return chunks;
-}
-
-/**
- * Create a silent Float32Array of the given length (in samples).
- */
-function createSilence(samples: number): Float32Array {
-  return new Float32Array(samples); // Already zeros
-}
-
-// ─── Audio Generation with Cache ────────────────────────────────────────────
-
-async function generateAudio(text: string, voice: string, speed: number = 1.0): Promise<AudioBuffer> {
-  const key = cacheKey(text, voice, speed);
-  const ctx = getAudioContext();
-
-  // Check cache first
-  const cached = await getCachedAudio(key);
-  if (cached) {
-    console.log('[VB] Cache hit:', text.substring(0, 40) + '...');
-    return createBufferAtContextRate(ctx, cached, 24000);
-  }
-
-  if (!tts) throw new Error('TTS not initialized');
-
-  // Determine if we need to chunk
-  const chunks = chunkText(text);
-
-  if (chunks.length === 1) {
-    // Single chunk — generate directly
-    console.log('[VB] Generating:', text.substring(0, 60) + '...', 'speed:', speed);
-    const audio = await tts.generate(chunks[0].text, { voice: voice as never, speed: speed as never });
-    const modelRate = audio.sampling_rate || 24000;
-    const rawSamples = audio.audio;
-    setCachedAudio(key, rawSamples).catch(() => {});
-    return createBufferAtContextRate(ctx, rawSamples, modelRate);
-  }
-
-  // Multi-chunk — generate each, insert silence, concatenate
-  console.log('[VB] Chunked into', chunks.length, 'parts:', chunks.map(c => c.text.length + ' chars').join(', '));
-
-  const audioParts: Float32Array[] = [];
-  for (let i = 0; i < chunks.length; i++) {
-    const chunk = chunks[i];
-    console.log('[VB] Chunk', i + 1, '/', chunks.length, ':', chunk.text.substring(0, 50) + '...');
-
-    const chunkAudio = await generateAudio(chunk.text, voice, speed); // Recursive — will be single-chunk
-    const samples = chunkAudio.getChannelData(0);
-    audioParts.push(new Float32Array(samples));
-
-    // Insert silence between chunks (not after the last one)
-    if (i < chunks.length - 1) {
-      audioParts.push(createSilence(chunk.pauseAfter));
-    }
-  }
-
-  // Concatenate all parts
-  const totalLength = audioParts.reduce((sum, p) => sum + p.length, 0);
-  const combined = new Float32Array(totalLength);
-  let offset = 0;
-  for (const part of audioParts) {
-    combined.set(part, offset);
-    offset += part.length;
-  }
-
-  setCachedAudio(key, combined).catch(() => {});
-  return createBufferAtContextRate(ctx, combined, 24000);
-}
-
-// Resample audio from sourceRate to the AudioContext's native rate.
-// If we create a buffer at the wrong rate, playback speed is wrong.
-function createBufferAtContextRate(
-  ctx: AudioContext,
-  samples: Float32Array,
-  sourceRate: number
-): AudioBuffer {
-  const targetRate = ctx.sampleRate;
-
-  if (sourceRate === targetRate) {
-    const buffer = ctx.createBuffer(1, samples.length, targetRate);
-    buffer.getChannelData(0).set(samples);
-    return buffer;
-  }
-
-  // Linear interpolation resampling — Kokoro outputs 24kHz, context is
-  // usually 44.1kHz or 48kHz.
-  const ratio = targetRate / sourceRate;
-  const newLength = Math.round(samples.length * ratio);
-  const buffer = ctx.createBuffer(1, newLength, targetRate);
-  const channelData = buffer.getChannelData(0);
-
-  for (let i = 0; i < newLength; i++) {
-    const srcIndex = i / ratio;
-    const srcIndexFloor = Math.floor(srcIndex);
-    const srcIndexCeil = Math.min(srcIndexFloor + 1, samples.length - 1);
-    const t = srcIndex - srcIndexFloor;
-    channelData[i] = samples[srcIndexFloor] * (1 - t) + samples[srcIndexCeil] * t;
-  }
-
-  return buffer;
-}
-
-// ─── Time Tracking ──────────────────────────────────────────────────────────
-
-// Current position (seconds, audio-rate) within the current paragraph.
-function computeCurrentTime(): number {
-  if (!currentBuffer) return 0;
-  if (isPaused) return pausedAt;
-  if ((state.status === 'playing' || state.status === 'generating') && audioContext && playbackStartTime > 0) {
-    return Math.max(0, Math.min(audioContext.currentTime - playbackStartTime, currentBuffer.duration));
-  }
-  return 0;
-}
-
-function startTimeUpdates(): void {
-  if (timeUpdateTimer !== null) return;
-  timeUpdateTimer = setInterval(() => {
-    broadcastState();
-  }, 250);
-}
-
-function stopTimeUpdates(): void {
-  if (timeUpdateTimer !== null) {
-    clearInterval(timeUpdateTimer);
-    timeUpdateTimer = null;
+function evictBehind(): void {
+  for (const idx of buffers.keys()) {
+    if (idx < playIdx - KEEP_BEHIND) buffers.delete(idx);
   }
 }
 
 // ─── Playback ───────────────────────────────────────────────────────────────
 
-let playResolve: (() => void) | null = null;
-
-function playBuffer(buffer: AudioBuffer, offset: number = 0): Promise<void> {
-  return new Promise((resolve) => {
-    const ctx = getAudioContext();
-
-    if (ctx.state === 'suspended') {
-      ctx.resume();
-    }
-
-    const source = ctx.createBufferSource();
-    source.buffer = buffer;
-    // Don't use playbackRate — it shifts pitch (Mickey Mouse effect).
-    // Speed is handled by Kokoro at generation time via the speed parameter.
-    source.connect(gainNode!);
-
-    playResolve = resolve;
-
-    source.onended = () => {
-      currentSource = null;
-      playResolve = null;
-      resolve();
-    };
-
-    currentSource = source;
-    source.start(0, offset);
-    playbackStartTime = ctx.currentTime - offset;
-  });
-}
-
-function stopCurrentPlayback(): void {
-  if (currentSource) {
-    currentSource.onended = null;
-    try { currentSource.stop(); } catch {}
-    currentSource = null;
-  }
-  // Resolve the pending playBuffer promise so the loop doesn't hang
-  // waiting for an onended that will never fire after stop().
-  if (playResolve) {
-    playResolve();
-    playResolve = null;
-  }
-}
-
-async function playbackLoop(): Promise<void> {
-  const gen = ++playbackGeneration;
-
-  while (currentParagraphIndex < paragraphs.length && isPlaying) {
-    // If paused, wait here until resumed or stopped
-    if (isPaused) {
-      await new Promise<void>((resolve) => {
-        const check = () => {
-          if (!isPaused || !isPlaying || gen !== playbackGeneration) resolve();
-          else setTimeout(check, 50);
-        };
-        check();
-      });
-      if (!isPlaying || gen !== playbackGeneration) return;
-    }
-
-    const buffer = audioQueue[currentParagraphIndex];
-    if (!buffer) {
-      state.currentParagraph = currentParagraphIndex;
-      state.status = 'generating';
-      broadcastState();
-
-      try {
-        const text = paragraphs[currentParagraphIndex];
-        console.log('[VB] Generating paragraph', currentParagraphIndex + 1, '/', paragraphs.length, '—', text.length, 'chars');
-        const generated = await generateAudio(
-          text,
-          state.voice,
-          state.speed
-        );
-        audioQueue[currentParagraphIndex] = generated;
-      } catch (e) {
-        const failedText = paragraphs[currentParagraphIndex]?.substring(0, 200) || '';
-        console.error('[VB] Generation failed on paragraph', currentParagraphIndex + 1, ':', e);
-        console.error('[VB] Failed text preview:', failedText);
-        console.error('[VB] Text length:', paragraphs[currentParagraphIndex]?.length, 'chars');
-        state.error = `Skipped paragraph ${currentParagraphIndex + 1}`;
-        state.status = 'error';
-        broadcastState();
-        // Clear error after 2 seconds and continue
-        setTimeout(() => {
-          if (state.error?.startsWith('Skipped paragraph')) {
-            state.error = undefined;
-            if (isPlaying) state.status = 'playing';
-            broadcastState();
-          }
-        }, 2000);
-        currentParagraphIndex++;
-        continue;
-      }
-
-      // Check if we got paused/stopped while generating
-      if (!isPlaying || gen !== playbackGeneration) return;
-      if (isPaused) continue; // Re-enter pause wait at top of loop
-
-      // Pre-generate next paragraph
-      if (
-        currentParagraphIndex + 1 < paragraphs.length &&
-        !audioQueue[currentParagraphIndex + 1]
-      ) {
-        generateAudio(paragraphs[currentParagraphIndex + 1], state.voice, state.speed)
-          .then((nextBuffer) => {
-            if (gen === playbackGeneration) {
-              audioQueue[currentParagraphIndex + 1] = nextBuffer;
-            }
-          })
-          .catch(console.error);
-      }
-    }
-
-    const playTarget = audioQueue[currentParagraphIndex]!;
-    currentBuffer = playTarget;
-    state.duration = playTarget.duration;
-    state.paragraphText = paragraphs[currentParagraphIndex].substring(0, 80);
-    state.currentParagraph = currentParagraphIndex;
-    state.status = 'playing';
-    startTimeUpdates();
-    broadcastState();
-
-    const offset = pausedAt;
-    // Don't reset pausedAt here — it gets reset when playback COMPLETES
-    // (not when the source is stopped mid-way). This way, if we pause
-    // and resume, we still have the correct offset.
-    await playBuffer(playTarget, offset);
-
-    // Playback finished (either completed or was interrupted)
-    if (!isPaused) {
-      // Completed naturally — reset pausedAt and advance
-      pausedAt = 0;
-      if (isPlaying && gen === playbackGeneration) {
-        currentParagraphIndex++;
-
-        // Insert a brief pause between paragraphs for natural prosody.
-        // 400ms silence at the audio context's sample rate.
-        if (currentParagraphIndex < paragraphs.length && isPlaying) {
-          const silenceSamples = Math.round(ctx_sampleRate() * 0.4); // 400ms
-          const silence = new Float32Array(silenceSamples);
-          const silenceBuf = getAudioContext().createBuffer(1, silenceSamples, ctx_sampleRate());
-          silenceBuf.getChannelData(0).set(silence);
-          await playBuffer(silenceBuf, 0);
-        }
-      }
-    }
-  }
-
-  if (currentParagraphIndex >= paragraphs.length && isPlaying) {
-    isPlaying = false;
-    stopTimeUpdates();
-    currentBuffer = null;
-    state.status = 'idle';
-    state.currentParagraph = 0;
-    state.totalParagraphs = 0;
-    state.currentTime = 0;
-    state.duration = 0;
-    state.paragraphText = '';
-    broadcastState();
-  }
-}
-
-// ─── Voice Preview ──────────────────────────────────────────────────────────
-
-async function handleVoicePreview(voice: string): Promise<void> {
-  const previewKey = `preview:${voice}`;
-  const displayName = VOICE_NAMES[voice] || voice;
-  const previewText = `Hi, I'm ${displayName}, and I'll be reading to you.`;
-
-  const ctx = getAudioContext();
-  if (ctx.state === 'suspended') {
-    await ctx.resume();
-  }
-
-  let buffer: AudioBuffer;
-
-  // Cached previews never regenerate — keyed separately from article audio.
-  const cached = await getCachedAudio(previewKey);
-  if (cached) {
-    buffer = createBufferAtContextRate(ctx, cached, 24000);
-  } else {
-    await initTTS(() => {});
-    if (!tts) throw new Error('TTS not initialized');
-    const audio = await tts.generate(previewText, { voice: voice as never });
-    const modelRate = audio.sampling_rate || 24000;
-    setCachedAudio(previewKey, audio.audio).catch(() => {});
-    buffer = createBufferAtContextRate(ctx, audio.audio, modelRate);
-  }
-
-  const source = ctx.createBufferSource();
-  source.buffer = buffer;
-  source.connect(gainNode!);
-  source.start();
-
-  await new Promise<void>((resolve) => {
-    source.onended = () => resolve();
-  });
-}
-
-// ─── State Broadcasting ────────────────────────────────────────────────────
-
-function broadcastState(): void {
-  state.currentTime = computeCurrentTime();
-  chrome.runtime
-    .sendMessage({
-      type: 'TTS_STATE_UPDATE',
-      data: { ...state },
-    })
-    .catch(() => {});
-}
-
-// ─── Message Handler ────────────────────────────────────────────────────────
-
-// Messages meant for other components (content script, background).
-// If we see these, we return false immediately — we don't handle them.
-const NOT_FOR_OFFSCREEN = new Set([
-  'VB_TOGGLE_PLAY',
-  'VB_SHOW_PLAYER',
-  'VB_HIDE_PLAYER',
-  'VB_UPDATE_STATE',
-  'EXTRACT_ARTICLE',
-  'START_READING',
-  'TTS_STATE_UPDATE',
-  'TTS_PREVIEW_DONE',
-  'OFFSCREEN_READY',
-]);
-
-chrome.runtime.onMessage.addListener(
-  (
-    message: {
-      type: string;
-      data?: unknown;
-    },
-    _sender: chrome.runtime.MessageSender,
-    sendResponse: (response: unknown) => void
-  ) => {
-    // Fast-path: not our message, don't hold the channel open
-    if (NOT_FOR_OFFSCREEN.has(message.type)) {
-      return false;
-    }
-
-    (async () => {
-      switch (message.type) {
-        case 'TTS_PING': {
-          sendResponse({ pong: true });
-          break;
-        }
-
-        case 'TTS_START': {
-          const article = message.data as ArticleData;
-          console.log('[VB] TTS_START received:', article.title, article.paragraphs?.length, 'paragraphs');
-          await handleTTSStart(article);
-          sendResponse({ status: 'started' });
-          break;
-        }
-
-        case 'TTS_PAUSE': {
-          if (isPlaying && !isPaused) {
-            isPaused = true;
-            // pausedAt is in BUFFER-seconds (not wall-clock).
-            // audioContext.currentTime - playbackStartTime gives wall-clock
-            // elapsed seconds. Divide by playbackRate to get buffer position.
-            if (audioContext && currentBuffer) {
-              const wallElapsed = audioContext.currentTime - playbackStartTime;
-              pausedAt = wallElapsed * state.speed;
-              console.log('[VB] Paused at', pausedAt.toFixed(2), 'buffer-seconds (wall:', wallElapsed.toFixed(2), 'speed:', state.speed, ')');
-            }
-            stopCurrentPlayback();
-            stopTimeUpdates();
-            state.status = 'paused';
-            broadcastState();
-          }
-          sendResponse({ status: 'paused' });
-          break;
-        }
-
-        case 'TTS_RESUME': {
-          if (isPaused) {
-            isPaused = false;
-            console.log('[VB] Resuming from', pausedAt.toFixed(2), 'buffer-seconds');
-            // playbackLoop will pick up from the pause wait and replay
-            // the current buffer starting at pausedAt offset.
-            broadcastState();
-          }
-          sendResponse({ status: 'resumed' });
-          break;
-        }
-
-        case 'TTS_STOP': {
-          isPlaying = false;
-          isPaused = false;
-          playbackGeneration++;
-          stopCurrentPlayback();
-          stopTimeUpdates();
-          paragraphs = [];
-          audioQueue = [];
-          currentParagraphIndex = 0;
-          pausedAt = 0;
-          currentBuffer = null;
-          state = {
-            ...state,
-            status: 'idle',
-            currentParagraph: 0,
-            totalParagraphs: 0,
-            title: '',
-            currentTime: 0,
-            duration: 0,
-            paragraphText: '',
-            error: undefined,
-          };
-          broadcastState();
-          sendResponse({ status: 'stopped' });
-          break;
-        }
-
-        case 'TTS_SKIP_FORWARD': {
-          if (currentParagraphIndex < paragraphs.length - 1) {
-            stopCurrentPlayback();
-            currentParagraphIndex++;
-            pausedAt = 0;
-            if (isPaused) {
-              isPaused = false;
-              state.status = 'playing';
-              broadcastState();
-            }
-          }
-          sendResponse({ status: 'skipped', index: currentParagraphIndex });
-          break;
-        }
-
-        case 'TTS_SKIP_BACK': {
-          if (currentParagraphIndex > 0) {
-            stopCurrentPlayback();
-            currentParagraphIndex--;
-            pausedAt = 0;
-            if (isPaused) {
-              isPaused = false;
-              state.status = 'playing';
-              broadcastState();
-            }
-          }
-          sendResponse({ status: 'skipped', index: currentParagraphIndex });
-          break;
-        }
-
-        case 'TTS_SEEK': {
-          const { offsetSeconds } = message.data as { offsetSeconds: number };
-          if (!currentBuffer || (!isPlaying && !isPaused)) {
-            sendResponse({ status: 'nothing_to_seek' });
-            break;
-          }
-
-          const maxOffset = currentBuffer.duration;
-          const clamped = Math.max(0, Math.min(offsetSeconds, maxOffset));
-
-          if (isPaused) {
-            // Stay paused — just move the position marker.
-            pausedAt = clamped;
-            broadcastState();
-          } else if (isPlaying) {
-            // Stop the current source and restart from the new offset.
-            // This resolves the pending playBuffer promise, so the loop
-            // advances currentParagraphIndex — we compensate, and pause+
-            // resume forces the loop to re-enter playing the same
-            // paragraph from `pausedAt`.
-            stopCurrentPlayback();
-            pausedAt = clamped;
-            currentParagraphIndex--;
-            isPaused = true;
-            isPaused = false;
-            state.status = 'playing';
-            startTimeUpdates();
-            playbackStartTime = audioContext ? audioContext.currentTime - clamped : -clamped;
-            broadcastState();
-          }
-
-          sendResponse({ status: 'seeked', offset: clamped });
-          break;
-        }
-
-        case 'TTS_SET_SPEED': {
-          const newSpeed = message.data as number;
-          if (newSpeed === state.speed) {
-            sendResponse({ status: 'speed_set', speed: state.speed });
-            break;
-          }
-
-          console.log('[VB] Speed change:', state.speed, '→', newSpeed);
-          state.speed = newSpeed;
-
-          // Speed is baked into the audio at generation time (Kokoro's
-          // speed parameter). Changing speed means we need to regenerate.
-          // Clear the audio queue and restart the current paragraph.
-          audioQueue = new Array(paragraphs.length).fill(null);
-
-          if (isPlaying) {
-            playbackGeneration++;
-            stopCurrentPlayback();
-            stopTimeUpdates();
-            pausedAt = 0;
-            isPaused = false;
-            currentBuffer = null;
-            state.status = 'generating';
-            broadcastState();
-            await new Promise((r) => setTimeout(r, 0));
-            playbackLoop();
-          } else {
-            broadcastState();
-          }
-
-          sendResponse({ status: 'speed_set', speed: state.speed });
-          break;
-        }
-
-        case 'TTS_SET_VOICE': {
-          const newVoice = message.data as string;
-          if (newVoice !== state.voice) {
-            console.log('[VB] Voice change:', state.voice, '→', newVoice);
-            state.voice = newVoice;
-            // Clear in-memory audio queue — old voice buffers are useless
-            audioQueue = new Array(paragraphs.length).fill(null);
-
-            if (isPlaying) {
-              // Stop current playback and cancel the old loop
-              playbackGeneration++;
-              stopCurrentPlayback();
-              stopTimeUpdates();
-              pausedAt = 0;
-              isPaused = false;
-              currentBuffer = null;
-              state.status = 'generating';
-              broadcastState();
-
-              // Let the old loop fully exit before starting a new one.
-              // The old loop's playBuffer promise was resolved by
-              // stopCurrentPlayback, and it will exit when it checks
-              // gen !== playbackGeneration. We yield so it can finish.
-              await new Promise((r) => setTimeout(r, 0));
-
-              playbackLoop();
-            } else {
-              broadcastState();
-            }
-          }
-          sendResponse({ status: 'voice_set', voice: state.voice });
-          break;
-        }
-
-        case 'TTS_GET_STATE': {
-          state.currentTime = computeCurrentTime();
-          sendResponse({ ...state });
-          break;
-        }
-
-        case 'TTS_GET_VOICES': {
-          if (tts) {
-            try {
-              const voices = tts.list_voices();
-              sendResponse({ voices });
-            } catch {
-              sendResponse({ voices: [] });
-            }
-          } else {
-            sendResponse({ voices: [] });
-          }
-          break;
-        }
-
-        default:
-          sendResponse({ error: `Unknown message: ${message.type}` });
-      }
-    })();
-    return true;
-  }
-);
-
-// ─── Startup: poll for pending job ─────────────────────────────────────────
-// The background stores a job in chrome.storage.local before creating this
-// document. We poll for it here — this avoids the race where the background
-// sends a message before our listener is registered.
-
-async function handleTTSStart(article: ArticleData): Promise<void> {
-  // Cancel any existing playback
-  playbackGeneration++;
-  stopCurrentPlayback();
-  stopTimeUpdates();
-
-  // Per-session overrides beat persisted defaults
-  if (article.voice) {
-    state.voice = article.voice;
-  } else {
-    state.voice = defaultVoice;
-  }
-  if (typeof article.speed === 'number' && article.speed > 0) {
-    state.speed = article.speed;
-  } else {
-    state.speed = defaultSpeed;
-  }
-
-  paragraphs = article.paragraphs;
-  audioQueue = new Array(paragraphs.length).fill(null);
-  currentParagraphIndex = 0;
-  pausedAt = 0;
-  currentBuffer = null;
-  isPlaying = true;
-  isPaused = false;
-
-  state.title = article.title;
-  state.totalParagraphs = paragraphs.length;
-  state.status = 'loading';
-  state.progress = 0;
-  state.currentTime = 0;
-  state.duration = 0;
-  state.paragraphText = '';
-  state.error = undefined;
-  broadcastState();
-
-  const ctx = getAudioContext();
-  if (ctx.state === 'suspended') {
-    await ctx.resume();
-  }
-
+function stopSource(): void {
+  if (!source) return;
+  source.onended = null;
   try {
-    await initTTS((progress) => {
-      state.progress = progress;
-      broadcastState();
-    });
-    console.log('[VB] TTS initialized, starting playback loop');
-    state.status = 'generating';
-    broadcastState();
-    playbackLoop().then(() => {
-      console.log('[VB] Playback loop exited');
-    }).catch((e) => {
-      console.error('[VB] Playback loop error:', e);
-    });
-  } catch (e) {
-    console.error('[VB] TTS init failed:', e);
-    state.status = 'error';
-    state.error = `Failed to initialize TTS: ${e}`;
-    broadcastState();
+    source.stop();
+  } catch {
+    /* already stopped */
   }
+  source.disconnect();
+  source = null;
 }
 
-(async function checkPendingJob() {
-  // Retry until chrome.storage is available (offscreen documents may not
-  // have the full extension API at module evaluation time)
-  let retries = 0;
-  while (retries < 50) {
-    try {
-      if (chrome?.storage?.local) break;
-    } catch {}
-    await new Promise((r) => setTimeout(r, 100));
-    retries++;
-  }
+function tryPlay(): void {
+  if (status === 'idle' || status === 'error' || status === 'starting' || status === 'loading' || status === 'paused') return;
+  if (source) return;
+  if (playIdx >= segments.length) return;
 
-  if (!chrome?.storage?.local) {
-    console.error('[VB] chrome.storage.local not available after 5s');
+  const buf = buffers.get(playIdx);
+  if (buf === undefined) {
+    setStatus('buffering');
+    void pump();
+    return;
+  }
+  if (buf === 'failed') {
+    advance();
     return;
   }
 
-  console.log('[VB] Chrome APIs ready, checking for pending job...');
-  loadSettings();
+  const c = getCtx();
+  const src = c.createBufferSource();
+  src.buffer = buf;
+  src.connect(gain!);
+  const offset = Math.min(playOffset, Math.max(0, buf.duration - 0.02));
+  src.onended = () => {
+    if (source !== src) return;
+    source = null;
+    advance();
+  };
+  source = src;
+  src.start(0, offset);
+  startedAt = c.currentTime - offset;
+  setStatus('playing');
+  emitSegment();
+}
 
-  try {
-    const result = await chrome.storage.local.get('pendingJob');
-    const job = result.pendingJob;
-    if (job && job.type === 'TTS_START' && Date.now() - job.timestamp < 30000) {
-      console.log('[VB] Found pending job, starting...');
-      await chrome.storage.local.remove('pendingJob');
-      await handleTTSStart(job.data as ArticleData);
-    }
-  } catch (e) {
-    console.log('[VB] No pending job or error:', e);
+function advance(): void {
+  playIdx++;
+  playOffset = 0;
+  if (playIdx >= segments.length) {
+    finish();
+    return;
   }
-})();
+  evictBehind();
+  void pump();
+  tryPlay();
+}
+
+function finish(): void {
+  send({ type: 'VB_EVENT', kind: 'finished' });
+  resetSession();
+}
+
+function currentOffset(): number {
+  const buf = buffers.get(playIdx);
+  if (source && ctx && buf instanceof AudioBuffer) {
+    return Math.max(0, Math.min(ctx.currentTime - startedAt, buf.duration));
+  }
+  return playOffset;
+}
+
+function jumpToSegment(idx: number): void {
+  if (!segments.length) return;
+  stopSource();
+  playIdx = Math.max(0, Math.min(idx, segments.length - 1));
+  playOffset = 0;
+  lastEmittedIdx = -1;
+  evictBehind();
+  void pump();
+  if (status === 'paused') emitSegment();
+  else tryPlay();
+}
+
+function pause(): void {
+  if (status !== 'playing' && status !== 'buffering') return;
+  playOffset = currentOffset();
+  stopSource();
+  setStatus('paused');
+}
+
+function resume(): void {
+  if (status !== 'paused') return;
+  setStatus('buffering');
+  tryPlay();
+}
+
+function firstSegmentOfParagraph(para: number): number {
+  return segments.findIndex((s) => s.para >= para);
+}
+
+function nextParagraph(): void {
+  const cur = segments[playIdx]?.para;
+  if (cur === undefined) return;
+  const idx = segments.findIndex((s) => s.para > cur);
+  if (idx === -1) return;
+  jumpToSegment(idx);
+}
+
+function prevParagraph(): void {
+  const cur = segments[playIdx];
+  if (!cur) return;
+  const curFirst = firstSegmentOfParagraph(cur.para);
+  const atStart = playIdx === curFirst && currentOffset() < 2.5;
+  if (!atStart) {
+    jumpToSegment(curFirst);
+    return;
+  }
+  let prevPara = -1;
+  for (const s of segments) {
+    if (s.para < cur.para) prevPara = s.para;
+    else break;
+  }
+  jumpToSegment(prevPara === -1 ? curFirst : firstSegmentOfParagraph(prevPara));
+}
+
+function seekToProgress(progress: number): void {
+  if (!segments.length) return;
+  const target = Math.max(0, Math.min(progress, 1)) * totalChars;
+  let lo = 0;
+  let hi = segments.length - 1;
+  while (lo < hi) {
+    const mid = (lo + hi + 1) >> 1;
+    if (segments[mid].cumChars <= target) lo = mid;
+    else hi = mid - 1;
+  }
+  jumpToSegment(lo);
+}
+
+function changeVoice(next: string): void {
+  if (next === voice) return;
+  voice = next;
+  invalidateAudio();
+}
+
+function changeSpeed(next: number): void {
+  if (!(next > 0) || next === speed) return;
+  secPerChar *= speed / next; // keep time estimates sane until new samples arrive
+  speed = next;
+  invalidateAudio();
+}
+
+/** Voice/speed changed: drop decoded audio and regenerate from this segment. */
+function invalidateAudio(): void {
+  epoch++;
+  buffers.clear();
+  if (!article) return; // idle: just remember the preference
+  stopSource();
+  playOffset = 0;
+  lastEmittedIdx = -1;
+  if (status === 'playing') setStatus('buffering');
+  void pump();
+  tryPlay();
+}
+
+// ─── Session lifecycle ──────────────────────────────────────────────────────
+
+function buildSegments(art: Article): Segment[] {
+  const out: Segment[] = [];
+  let cum = 0;
+  art.paragraphs.forEach((p, i) => {
+    const spans = chunkParagraph(p.text, p.kind, { fast: i === art.startParagraph });
+    for (const span of spans) {
+      const text = p.text.slice(span.start, span.end);
+      const speech = prepareForSpeech(text);
+      if (!/[\p{L}\p{N}]/u.test(speech)) continue; // nothing speakable
+      out.push({
+        para: i,
+        start: span.start,
+        end: span.end,
+        text,
+        speech,
+        pauseMs: span.pauseMs,
+        chars: text.length,
+        cumChars: cum,
+      });
+      cum += text.length;
+    }
+  });
+  totalChars = cum;
+  return out;
+}
+
+function resetSession(silent = false): void {
+  sessionId++;
+  epoch++;
+  stopSource();
+  buffers.clear();
+  article = null;
+  segments = [];
+  totalChars = 0;
+  playIdx = 0;
+  playOffset = 0;
+  lastEmittedIdx = -1;
+  consecutiveFailures = 0;
+  loadProgress = 0;
+  errorMessage = undefined;
+  // A restart must not announce "idle": the background would end the session
+  // it just stored for the new one.
+  if (silent) status = 'idle';
+  else setStatus('idle');
+}
+
+function fail(message: string): void {
+  stopSource();
+  setStatus('error', message);
+}
+
+async function startSession(art: Article, v: string, s: number): Promise<void> {
+  resetSession(true);
+  const mine = sessionId;
+
+  article = art;
+  voice = v;
+  speed = s;
+  segments = buildSegments(art);
+  if (!segments.length) {
+    article = null;
+    fail('There was nothing readable on this page.');
+    return;
+  }
+  playIdx = Math.max(0, firstSegmentOfParagraph(art.startParagraph));
+  setupMediaSession(art.title);
+  getCtx();
+
+  if (!isEngineReady()) {
+    setStatus('loading');
+    try {
+      await ensureEngine((p) => {
+        if (mine === sessionId) loadProgress = p;
+      });
+    } catch (e) {
+      console.error('[VB] Engine load failed:', e);
+      if (mine === sessionId) {
+        fail(
+          navigator.onLine
+            ? 'Could not load the voice model. Please try again.'
+            : 'The voice model needs a one-time download. Connect to the internet and try again.'
+        );
+      }
+      return;
+    }
+    if (mine !== sessionId) return;
+  }
+  setStatus('buffering');
+  void pump();
+  tryPlay();
+}
+
+function stopSession(): void {
+  resetSession();
+}
+
+// ─── Media session (hardware media keys, Now Playing) ──────────────────────
+
+function setupMediaSession(title: string): void {
+  if (!('mediaSession' in navigator)) return;
+  navigator.mediaSession.metadata = new MediaMetadata({ title, artist: 'Voicebox Reader' });
+  navigator.mediaSession.setActionHandler('play', resume);
+  navigator.mediaSession.setActionHandler('pause', pause);
+  navigator.mediaSession.setActionHandler('nexttrack', nextParagraph);
+  navigator.mediaSession.setActionHandler('previoustrack', prevParagraph);
+}
+
+function updateMediaSession(): void {
+  if (!('mediaSession' in navigator)) return;
+  navigator.mediaSession.playbackState =
+    status === 'playing' || status === 'buffering' ? 'playing' : status === 'paused' ? 'paused' : 'none';
+}
+
+// ─── State snapshot ─────────────────────────────────────────────────────────
+
+function getState(): PlayerState {
+  if (!article) {
+    return { ...IDLE_STATE, status, voice, speed, error: errorMessage, device: engineDevice() };
+  }
+  const seg = segments[playIdx];
+  const buf = buffers.get(playIdx);
+  const dur = buf instanceof AudioBuffer ? buf.duration : 0;
+  const frac = seg && dur > 0 ? Math.min(1, currentOffset() / dur) : 0;
+  const charsDone = seg ? seg.cumChars + frac * seg.chars : 0;
+  const known = status !== 'loading' && status !== 'starting';
+  return {
+    status,
+    title: article.title,
+    voice,
+    speed,
+    paraIndex: seg?.para ?? 0,
+    totalParas: article.paragraphs.length,
+    progress: totalChars ? Math.min(1, charsDone / totalChars) : 0,
+    elapsed: charsDone * secPerChar,
+    remaining: known ? Math.max(0, (totalChars - charsDone) * secPerChar) : null,
+    loadProgress,
+    device: engineDevice(),
+    currentText: seg?.text ?? '',
+    error: errorMessage,
+  };
+}
+
+// ─── Command dispatch ───────────────────────────────────────────────────────
+
+function runCommand(c: Command): void {
+  switch (c.cmd) {
+    case 'toggle':
+      if (status === 'paused') resume();
+      else pause();
+      break;
+    case 'pause': pause(); break;
+    case 'resume': resume(); break;
+    case 'stop': stopSession(); break;
+    case 'next': nextParagraph(); break;
+    case 'prev': prevParagraph(); break;
+    case 'seek': seekToProgress(c.progress); break;
+    case 'jump': {
+      const idx = firstSegmentOfParagraph(c.paragraph);
+      if (idx !== -1) jumpToSegment(idx);
+      break;
+    }
+    case 'voice': changeVoice(c.voice); break;
+    case 'speed': changeSpeed(c.speed); break;
+  }
+}
+
+chrome.runtime.onMessage.addListener((message: OffscreenRequest, _sender, sendResponse) => {
+  if (message?.target !== 'offscreen') return false;
+
+  switch (message.type) {
+    case 'TTS_PING':
+      sendResponse({ pong: true });
+      return false;
+    case 'TTS_START':
+      void startSession(message.article, message.voice, message.speed);
+      sendResponse({ ok: true });
+      return false;
+    case 'TTS_COMMAND':
+      runCommand(message.command);
+      sendResponse(getState());
+      return false;
+    case 'TTS_GET_STATE':
+      sendResponse(getState());
+      return false;
+    case 'TTS_CLEAR_CACHE':
+      void cacheClear().then((cleared) => sendResponse({ cleared }));
+      return true;
+  }
+  return false;
+});
+
+console.log('[VB] Offscreen ready');

@@ -1,16 +1,20 @@
 {
   "manifest_version": 3,
   "name": "Voicebox Reader",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Read any article aloud with natural AI voices. Powered by Kokoro TTS running locally in your browser.",
   "permissions": [
     "activeTab",
     "scripting",
     "offscreen",
-    "storage"
+    "storage",
+    "contextMenus",
+    "alarms"
   ],
   "host_permissions": [
-    "<all_urls>"
+    "https://huggingface.co/*",
+    "https://*.huggingface.co/*",
+    "https://*.hf.co/*"
   ],
   "action": {
     "default_popup": "popup/popup.html",
@@ -18,34 +22,36 @@
       "16": "icons/icon16.png",
       "48": "icons/icon48.png",
       "128": "icons/icon128.png"
-    }
+    },
+    "default_title": "Voicebox Reader"
   },
   "background": {
     "service_worker": "background/background.js",
     "type": "module"
   },
-  "content_scripts": [
-    {
-      "matches": ["<all_urls>"],
-      "js": ["content/content.js"],
-      "run_at": "document_idle"
-    }
-  ],
   "commands": {
     "read-article": {
       "suggested_key": {
         "default": "Alt+Shift+R",
         "mac": "Alt+Shift+R"
       },
-      "description": "Read this article aloud"
+      "description": "Start reading, or play/pause"
+    },
+    "next-paragraph": {
+      "suggested_key": {
+        "default": "Alt+Shift+Right",
+        "mac": "Alt+Shift+Right"
+      },
+      "description": "Skip to next paragraph"
+    },
+    "prev-paragraph": {
+      "suggested_key": {
+        "default": "Alt+Shift+Left",
+        "mac": "Alt+Shift+Left"
+      },
+      "description": "Back to previous paragraph"
     }
   },
-  "web_accessible_resources": [
-    {
-      "resources": ["wasm/*", "previews/*"],
-      "matches": ["<all_urls>"]
-    }
-  ],
   "content_security_policy": {
     "extension_pages": "script-src 'self' 'wasm-unsafe-eval'; object-src 'self'"
   },
