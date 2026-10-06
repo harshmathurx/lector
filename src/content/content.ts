@@ -131,14 +131,16 @@ function collect(elements: Iterable<Element>, liveFor: (el: Element) => Element 
   const seen = new Set<Element>();
   for (const el of elements) {
     if (!isLeafBlock(el)) continue;
+    // Readability invents blocks (e.g. <br><br> becomes <p>), which have no
+    // live-DOM twin. Still read them; they just can't be highlighted.
     const live = liveFor(el);
-    if (!live || seen.has(live)) continue;
-    const map = buildTextMap(live);
+    if (live && seen.has(live)) continue;
+    const text = buildTextMap(live ?? el).text;
     const kind = kindOf(el.tagName.toUpperCase());
-    if (map.text.length < minLength(kind)) continue;
-    seen.add(live);
-    paragraphs.push({ text: map.text, kind });
-    outBlocks.push({ el: live, map });
+    if (text.length < minLength(kind)) continue;
+    if (live) seen.add(live);
+    paragraphs.push({ text, kind });
+    outBlocks.push(live ? { el: live, map: null } : null);
   }
   return { paragraphs, blocks: outBlocks };
 }
@@ -163,7 +165,32 @@ function extractWithReadability(): Extracted | null {
     const i = el.getAttribute('data-vb-i');
     return i !== null ? liveBlocks[Number(i)] ?? null : null;
   });
-  return result.paragraphs.length ? result : null;
+  if (result.paragraphs.length) return result;
+  return parsed.textContent ? fromPlainText(parsed.textContent) : null;
+}
+
+/** Minimal-markup pages (text + <br>s): split Readability's plain text. */
+function fromPlainText(text: string): Extracted | null {
+  let parts = text.split(/\n{2,}/).map((p) => p.trim()).filter((p) => p.length > 10);
+  if (parts.length <= 2) {
+    parts = text.split(/\n/).map((p) => p.trim()).filter((p) => p.length > 30);
+  }
+  if (parts.length <= 1 && text.length > 500) {
+    const chunks: string[] = [];
+    let cur = '';
+    for (const sentence of text.match(/[^.!?]+[.!?]+/g) ?? [text]) {
+      cur += sentence;
+      if (cur.length > 300) {
+        chunks.push(cur.trim());
+        cur = '';
+      }
+    }
+    if (cur.trim()) chunks.push(cur.trim());
+    parts = chunks;
+  }
+  parts = parts.map((p) => p.replace(/\s+/g, ' '));
+  if (!parts.length) return null;
+  return { paragraphs: parts.map((t) => ({ text: t, kind: 'text' as const })), blocks: parts.map(() => null) };
 }
 
 /** Last resort for pages Readability gives up on: read the main landmark. */
