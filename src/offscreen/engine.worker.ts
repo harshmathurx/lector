@@ -3,7 +3,9 @@
 // Heavy libraries are imported lazily so a load failure becomes an error
 // message instead of a dead worker.
 
-import type { WorkerRequest, WorkerResponse } from './engine';
+import type { Dtype, LoadOptions, WorkerRequest, WorkerResponse } from './engine';
+import { chooseTier, chooseWasm } from './tier';
+import type { Device, Hardware, Tier } from './tier';
 
 interface KokoroLike {
   generate(
@@ -11,8 +13,6 @@ interface KokoroLike {
     opts: { voice: string; speed: number }
   ): Promise<{ audio: Float32Array; sampling_rate: number }>;
 }
-
-type Device = 'webgpu' | 'wasm';
 
 const MODEL_ID = 'onnx-community/Kokoro-82M-v1.0-ONNX';
 const scope = self as unknown as {
@@ -23,25 +23,62 @@ const post = (msg: WorkerResponse, transfer?: Transferable[]) => scope.postMessa
 
 let kokoro: KokoroLike | null = null;
 let device: Device | null = null;
+let dtype: Dtype = 'q8';
+let threads = 1;
 let wasmBase = '';
+let opts: LoadOptions;
+let hardware: Hardware;
 
-async function hasWebGPU(): Promise<boolean> {
-  const gpu = (navigator as unknown as { gpu?: { requestAdapter(): Promise<unknown> } }).gpu;
+interface GpuAdapter {
+  isFallbackAdapter?: boolean;
+  info?: { vendor?: string; architecture?: string; description?: string; isFallbackAdapter?: boolean };
+}
+
+/** True when a real (non-software) WebGPU adapter exists. */
+async function probeGpu(): Promise<boolean> {
+  const gpu = (navigator as unknown as { gpu?: { requestAdapter(): Promise<GpuAdapter | null> } }).gpu;
   if (!gpu) return false;
   try {
-    return (await gpu.requestAdapter()) !== null;
+    const adapter = await gpu.requestAdapter();
+    if (!adapter) return false;
+    const fallback = adapter.isFallbackAdapter ?? adapter.info?.isFallbackAdapter ?? false;
+    console.log('[Lector] gpu', JSON.stringify({ ...adapter.info, fallback }));
+    return !fallback;
   } catch {
     return false;
   }
 }
 
-async function loadModel(want: Device): Promise<void> {
+function describeHardware(gpu: boolean): Hardware {
+  return {
+    gpu,
+    isolated: (self as unknown as { crossOriginIsolated?: boolean }).crossOriginIsolated === true,
+    cores: navigator.hardwareConcurrency || 2,
+    memGB: (navigator as unknown as { deviceMemory?: number }).deviceMemory,
+    gpuSlowBefore: opts.gpuSlowBefore,
+  };
+}
+
+/** The automatic tier, with the developer overrides from the benchmark harness applied. */
+function resolve(want: 'wasm' | undefined): Tier {
+  let t = want === 'wasm' ? chooseWasm(hardware) : chooseTier(hardware);
+  if (opts.device) t = opts.device === 'wasm' ? chooseWasm(hardware) : { ...t, device: 'webgpu', dtype: 'fp32' };
+  if (t.device === 'webgpu' && opts.dtypeGpu) t = { ...t, dtype: opts.dtypeGpu };
+  if (t.device === 'wasm' && opts.dtypeWasm) t = { ...t, dtype: opts.dtypeWasm };
+  if (t.device === 'wasm' && opts.threads) t = { ...t, threads: hardware.isolated ? opts.threads : 1 };
+  return t;
+}
+
+async function loadModel(tier: Tier): Promise<void> {
   // wasm paths must be set on the ONNX runtime before kokoro-js touches it.
   const ort = await import('onnxruntime-web');
   (ort.env.wasm as unknown as { wasmPaths: unknown }).wasmPaths = {
     mjs: `${wasmBase}ort-wasm-simd-threaded.jsep.mjs`,
     wasm: `${wasmBase}ort-wasm-simd-threaded.jsep.wasm`,
   };
+  // numThreads > 1 only takes effect in a cross-origin isolated document
+  // (tier.threads is already 1 otherwise).
+  (ort.env.wasm as unknown as { numThreads: number }).numThreads = tier.threads;
   const { KokoroTTS } = await import('kokoro-js');
 
   const files = new Map<string, number>();
@@ -56,25 +93,30 @@ async function loadModel(want: Device): Promise<void> {
     }
   };
 
+  console.log('[Lector] loading', JSON.stringify({ ...tier, hw: hardware }));
   kokoro = (await KokoroTTS.from_pretrained(MODEL_ID, {
-    dtype: want === 'webgpu' ? 'fp32' : 'q8',
-    device: want,
+    dtype: tier.dtype,
+    device: tier.device,
     progress_callback,
   })) as unknown as KokoroLike;
-  device = want;
+  device = tier.device;
+  dtype = tier.dtype;
+  threads = tier.threads;
 }
 
 async function load(): Promise<void> {
   if (kokoro) return;
-  if (await hasWebGPU()) {
+  hardware = describeHardware(await probeGpu());
+  const tier = resolve(undefined);
+  if (tier.device === 'webgpu') {
     try {
-      await loadModel('webgpu');
+      await loadModel(tier);
       return;
     } catch (e) {
       console.warn('[Lector] WebGPU load failed, falling back to WASM:', e);
     }
   }
-  await loadModel('wasm');
+  await loadModel(resolve('wasm'));
 }
 
 async function generate(text: string, voice: string, speed: number) {
@@ -86,7 +128,7 @@ async function generate(text: string, voice: string, speed: number) {
     if (device !== 'webgpu') throw e;
     console.warn('[Lector] WebGPU inference failed, reloading on WASM:', e);
     kokoro = null;
-    await loadModel('wasm');
+    await loadModel(resolve('wasm'));
     return kokoro!.generate(text, { voice, speed });
   }
 }
@@ -100,13 +142,15 @@ scope.onmessage = (e) => {
   chain = chain.then(async () => {
     try {
       if (msg.type === 'load') {
+        opts = msg;
         wasmBase = msg.wasmBase;
         await load();
-        post({ type: 'ready', device: device! });
+        post({ type: 'ready', device: device!, dtype, threads });
       } else if (msg.type === 'generate') {
+        const t0 = performance.now();
         const out = await generate(msg.text, msg.voice, msg.speed);
         post(
-          { type: 'audio', id: msg.id, samples: out.audio, sampleRate: out.sampling_rate || 24000 },
+          { type: 'audio', id: msg.id, samples: out.audio, sampleRate: out.sampling_rate || 24000, genMs: performance.now() - t0 },
           [out.audio.buffer]
         );
       }

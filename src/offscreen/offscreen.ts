@@ -16,7 +16,8 @@ import { IDLE_STATE } from '../shared/protocol';
 import { chunkParagraph } from '../shared/chunker';
 import { prepareForSpeech } from '../shared/speech';
 import { cacheClear, cacheGet, cacheKey, cachePut } from './cache';
-import { engineDevice, ensureEngine, isEngineReady, synthesize } from './engine';
+import { engineDevice, engineInfo, ensureEngine, isEngineReady, synthesize } from './engine';
+import type { LoadOptions } from './engine';
 
 // ─── Types & state ──────────────────────────────────────────────────────────
 
@@ -32,7 +33,12 @@ interface Segment {
   cumChars: number;
 }
 
-const LOOKAHEAD = 4; // segments generated ahead of the playhead
+// Generation runs ahead of the playhead until this many SECONDS of audio are
+// buffered, chosen from the measured real-time factor (generation time / audio
+// time). A fast device keeps a short lead (little work is wasted when the user
+// seeks or stops); a slow one buffers more so a slow sentence does not stall.
+const MIN_AHEAD_SEGMENTS = 2;
+const MAX_AHEAD_SEGMENTS = 8;
 const KEEP_BEHIND = 2; // decoded buffers kept behind the playhead
 const MODEL_RATE = 24000;
 const DEFAULT_SEC_PER_CHAR = 1 / 15;
@@ -58,11 +64,83 @@ let epoch = 0; // bumps when buffers become invalid (voice/speed change, new ses
 let sessionId = 0; // bumps on every start/stop
 let consecutiveFailures = 0;
 let secPerChar = DEFAULT_SEC_PER_CHAR;
+// The rate shown to the user. Lookahead keeps refining secPerChar while paused,
+// so the displayed clock would creep; only adopt new estimates while playing.
+let shownSecPerChar = DEFAULT_SEC_PER_CHAR;
+/** Measured generation time / audio time (EMA over generated, not cached, segments). */
+let rtf: number | null = null;
+/** After an underrun, wait for a bigger lead before resuming so stalls are fewer. */
+let rebuffering = false;
+/** First segment index of this session (the start-up ramp only applies near it). */
+let rampFrom = 0;
 
 let ctx: AudioContext | null = null;
 let gain: GainNode | null = null;
 let source: AudioBufferSourceNode | null = null;
 let startedAt = 0; // ctx.currentTime corresponding to buffer offset 0
+
+// ─── Diagnostics ────────────────────────────────────────────────────────────
+// Cheap counters, always on, readable from DevTools / the e2e harness as
+// globalThis.__lectorStats. Nothing leaves the browser.
+
+interface SegStat { idx: number; chars: number; audioSec: number; genMs: number; cached: boolean }
+const stats = {
+  segs: [] as SegStat[],
+  underruns: 0,
+  bufferingMs: 0,
+  loadMs: 0,
+  startToAudioMs: 0,
+  info: null as ReturnType<typeof engineInfo>,
+};
+(globalThis as unknown as { __lectorStats: typeof stats }).__lectorStats = stats;
+let bufferingSince = 0;
+let startedSessionAt = 0;
+let firstAudioPending = false;
+let debug: { keepAudio?: number; noCache?: boolean; noSuspend?: boolean; noKeepAlive?: boolean; leadSec?: number; legacy?: boolean } & Partial<LoadOptions> & { lookahead?: number } = {};
+// Developer override for benchmarks: __lectorSetDebug({device, dtypeGpu, dtypeWasm, threads, lookahead, noCache, keepAudio}).
+(globalThis as unknown as { __lectorSetDebug: (d: typeof debug) => void }).__lectorSetDebug = (d) => {
+  debug = d;
+};
+const keptAudio: number[][] = [];
+(globalThis as unknown as { __lectorAudio: number[][] }).__lectorAudio = keptAudio;
+
+// "Is this machine's GPU slower than real time?" is remembered across sessions
+// (extension-origin localStorage) so a weak iGPU next to a strong CPU switches to
+// the threaded WASM tier. 'slow' = prefer WASM; 'keep' = WASM was slow too, stop
+// switching.
+const SPEED_FLAG = 'lector.gpuSlow';
+function speedFlag(): string | null {
+  try {
+    return localStorage.getItem(SPEED_FLAG);
+  } catch {
+    return null;
+  }
+}
+function setSpeedFlag(v: string): void {
+  try {
+    localStorage.setItem(SPEED_FLAG, v);
+  } catch {
+    /* private mode etc.: just don't remember */
+  }
+}
+function engineOptions(): Omit<LoadOptions, 'wasmBase'> {
+  return { ...debug, gpuSlowBefore: speedFlag() === 'slow' };
+}
+
+let speedNoted = false;
+/** After a few real segments, log the real-time factor and remember a slow GPU. */
+function noteSpeed(): void {
+  if (speedNoted) return;
+  const info = engineInfo();
+  const gen = stats.segs.filter((x) => !x.cached && x.genMs > 0).slice(1); // first one pays shader/JIT warm-up
+  if (!info || gen.length < 3) return;
+  speedNoted = true;
+  const ratio = gen.reduce((n, x) => n + x.genMs, 0) / 1000 / gen.reduce((n, x) => n + x.audioSec, 0);
+  console.log('[Lector] speed', JSON.stringify({ ...info, rtf: +ratio.toFixed(2) }));
+  if (ratio <= 1) return;
+  if (info.device === 'webgpu' && speedFlag() === null) setSpeedFlag('slow');
+  else if (info.device === 'wasm' && speedFlag() === 'slow') setSpeedFlag('keep');
+}
 
 // ─── Events to background ───────────────────────────────────────────────────
 
@@ -73,7 +151,15 @@ function send(event: OffscreenEvent): void {
 function setStatus(next: Status, error?: string): void {
   errorMessage = next === 'error' ? error : undefined;
   if (status === next && next !== 'error') return;
+  if (next === 'buffering' && status !== 'buffering') bufferingSince = firstAudioPending ? 0 : performance.now();
+  // only stalls after audio has started count (start-up wait is time to first audio)
+  if (status === 'buffering' && next !== 'buffering' && bufferingSince) stats.bufferingMs += performance.now() - bufferingSince;
+  if (next === 'playing' && firstAudioPending) {
+    firstAudioPending = false;
+    stats.startToAudioMs = performance.now() - startedSessionAt;
+  }
   status = next;
+  setKeepAlive(next === 'loading' || next === 'buffering' || next === 'starting');
   send({ type: 'VB_EVENT', kind: 'status', status: next, error: errorMessage });
   updateMediaSession();
 }
@@ -99,20 +185,51 @@ function emitSegment(durationMs = 0, offsetMs = 0): void {
 
 // ─── Audio ──────────────────────────────────────────────────────────────────
 
-function getCtx(): AudioContext {
+function getCtx(resume = true): AudioContext {
   if (!ctx) {
     ctx = new AudioContext();
     gain = ctx.createGain();
     gain.connect(ctx.destination);
   }
-  if (ctx.state === 'suspended') void ctx.resume();
+  if (resume && ctx.state === 'suspended') void ctx.resume();
   return ctx;
+}
+
+// Chrome closes an AUDIO_PLAYBACK offscreen document after 30s without audible
+// audio. On a slow or starved machine one sentence (or the first model load)
+// can take longer than that, which killed the session. While we are waiting on
+// the model, hold the document open with a constant 0.002 DC signal: ~-54dBFS,
+// above Chrome's "audible" threshold, and DC is inaudible (no tone, no hiss).
+// Only active while loading/buffering, never while paused or idle.
+let keepAlive: { src: ConstantSourceNode; level: GainNode } | null = null;
+function setKeepAlive(on: boolean): void {
+  if (debug.noKeepAlive) return;
+  if (on && !keepAlive && ctx) {
+    const src = ctx.createConstantSource();
+    const level = ctx.createGain();
+    level.gain.value = 0;
+    src.connect(level).connect(ctx.destination);
+    src.start();
+    level.gain.setTargetAtTime(0.002, ctx.currentTime, 0.1);
+    keepAlive = { src, level };
+  } else if (!on && keepAlive && ctx) {
+    const k = keepAlive;
+    keepAlive = null;
+    k.level.gain.setTargetAtTime(0, ctx.currentTime, 0.02);
+    k.src.stop(ctx.currentTime + 0.2);
+    setTimeout(() => k.level.disconnect(), 400);
+  }
+}
+
+/** A running AudioContext keeps the audio device and its render thread busy even when silent. */
+function suspendAudio(): void {
+  if (ctx && ctx.state === 'running' && !debug.noSuspend && !debug.legacy) void ctx.suspend();
 }
 
 const FADE_SAMPLES = 72; // 3ms at 24kHz, removes clicks at segment edges
 
 function toBuffer(samples: Float32Array, rate: number, pauseMs: number): AudioBuffer {
-  const c = getCtx();
+  const c = getCtx(false); // buffers are built while paused too; don't wake the device
   const silence = Math.round((pauseMs / 1000) * rate);
   const buf = c.createBuffer(1, samples.length + silence, rate);
   const data = buf.getChannelData(0);
@@ -129,15 +246,23 @@ function toBuffer(samples: Float32Array, rate: number, pauseMs: number): AudioBu
 async function synth(idx: number, v: string, s: number): Promise<AudioBuffer> {
   const seg = segments[idx];
   const key = await cacheKey(seg.speech, v, s);
-  let samples = await cacheGet(key);
+  let samples = debug.noCache ? null : await cacheGet(key);
   let rate = MODEL_RATE;
+  let genMs = 0;
+  const cached = !!samples;
   if (!samples) {
     const out = await synthesize(seg.speech, v, s);
     samples = out.samples;
     rate = out.sampleRate;
+    genMs = out.genMs;
+    const ratio = genMs / 1000 / Math.max(0.1, out.samples.length / out.sampleRate);
+    rtf = rtf === null ? ratio : rtf * 0.6 + ratio * 0.4;
+    if (debug.keepAudio && keptAudio.length < debug.keepAudio) keptAudio.push(Array.from(samples));
     void cachePut(key, samples);
   }
   const seconds = samples.length / rate;
+  stats.segs.push({ idx, chars: seg.chars, audioSec: seconds, genMs, cached });
+  noteSpeed();
   secPerChar = secPerChar === DEFAULT_SEC_PER_CHAR
     ? seconds / seg.chars
     : secPerChar * 0.7 + (seconds / seg.chars) * 0.3;
@@ -150,10 +275,91 @@ async function synth(idx: number, v: string, s: number): Promise<AudioBuffer> {
 let pumping = false;
 let pumpAgain = false;
 
+/** Seconds of audio target ahead of the playhead for the current device speed. */
+function leadTargetSec(): number {
+  const r = debug.leadSec ?? null;
+  if (r !== null) return r;
+  const x = rtf ?? 0.5; // unknown yet: assume middling
+  return x < 0.35 ? 12 : x < 0.8 ? 24 : 40;
+}
+
+/** Seconds of decoded audio ready from the playhead onward (contiguous). */
+function readyLeadSec(): { lead: number; reachesEnd: boolean } {
+  let lead = 0;
+  for (let i = playIdx; i < segments.length; i++) {
+    const b = buffers.get(i);
+    if (b === undefined) return { lead, reachesEnd: false };
+    if (b !== 'failed') lead += b.duration - (i === playIdx ? currentOffset() : 0);
+  }
+  return { lead, reachesEnd: true };
+}
+
 function nextToGenerate(): number {
-  const last = Math.min(playIdx + LOOKAHEAD, segments.length - 1);
-  for (let i = playIdx; i <= last; i++) if (!buffers.has(i)) return i;
+  if (debug.legacy) {
+    // v0.3 behaviour, kept for A/B benchmarks: a fixed 4 segments ahead
+    const lastLegacy = Math.min(playIdx + 4, segments.length - 1);
+    for (let i = playIdx; i <= lastLegacy; i++) if (!buffers.has(i)) return i;
+    return -1;
+  }
+  const last = Math.min(playIdx + MAX_AHEAD_SEGMENTS - 1, segments.length - 1);
+  const target = leadTargetSec();
+  let lead = 0;
+  for (let i = playIdx; i <= last; i++) {
+    const b = buffers.get(i);
+    if (b === undefined) return i - playIdx < MIN_AHEAD_SEGMENTS || lead < target ? i : -1;
+    if (b !== 'failed') lead += b.duration - (i === playIdx ? currentOffset() : 0);
+  }
   return -1;
+}
+
+/**
+ * Start-up ramp. The first sentence is short so audio starts fast, but the next
+ * one may be long: at a real-time factor of ~0.4 a 200 character sentence takes
+ * longer to generate than the 2s of audio we are playing, so we would stall right
+ * after starting. Once the first segment has told us the device speed, split the
+ * next not-yet-generated segment into a short head (the chunker's "fast" limit)
+ * and the rest when generating it would outlast the audio we already hold.
+ * Returns true when the segment list changed.
+ */
+function rampSplit(idx: number): boolean {
+  if (debug.legacy || rtf === null || rtf < 0.3 || idx - rampFrom >= 4) return false;
+  const seg = segments[idx];
+  if (!seg || seg.chars <= 110) return false;
+  for (const k of buffers.keys()) if (k > idx) return false; // indices after idx must not exist yet
+  let lead = 0;
+  for (let i = playIdx; i < idx; i++) {
+    const b = buffers.get(i);
+    if (b instanceof AudioBuffer) lead += b.duration - (i === playIdx ? currentOffset() : 0);
+  }
+  if (rtf * secPerChar * seg.chars <= lead * 0.9) return false;
+  const spans = chunkParagraph(seg.text, 'text', { fast: true });
+  if (spans.length < 2) return false;
+  const pieces: Segment[] = [];
+  let cum = seg.cumChars;
+  spans.forEach((sp, n) => {
+    const text = seg.text.slice(sp.start, sp.end);
+    const speech = prepareForSpeech(text);
+    if (!/[\p{L}\p{N}]/u.test(speech)) return;
+    pieces.push({
+      para: seg.para,
+      start: seg.start + sp.start,
+      end: seg.start + sp.end,
+      text,
+      speech,
+      pauseMs: n === spans.length - 1 ? seg.pauseMs : sp.pauseMs,
+      chars: text.length,
+      cumChars: cum,
+    });
+    cum += text.length;
+  });
+  if (pieces.length < 2) return false;
+  const delta = cum - seg.cumChars - seg.chars;
+  segments.splice(idx, 1, ...pieces);
+  if (delta !== 0) {
+    totalChars += delta;
+    for (let i = idx + pieces.length; i < segments.length; i++) segments[i].cumChars += delta;
+  }
+  return true;
 }
 
 async function pump(): Promise<void> {
@@ -168,6 +374,7 @@ async function pump(): Promise<void> {
       for (;;) {
         const idx = nextToGenerate();
         if (idx === -1 || !isEngineReady()) break;
+        if (rampSplit(idx)) continue;
         const myEpoch = epoch;
         const mySession = sessionId;
         let result: AudioBuffer | 'failed';
@@ -224,6 +431,10 @@ function tryPlay(): void {
 
   const buf = buffers.get(playIdx);
   if (buf === undefined) {
+    if (status === 'playing') {
+      stats.underruns++;
+      rebuffering = !debug.legacy;
+    }
     setStatus('buffering');
     void pump();
     return;
@@ -231,6 +442,20 @@ function tryPlay(): void {
   if (buf === 'failed') {
     advance();
     return;
+  }
+  if (rebuffering) {
+    // We just ran dry. When generation is only about as fast as playback
+    // (rtf near or above 1) starting again on a single sentence would run dry
+    // again, so wait for a few seconds of lead first. Below ~0.9 the lead grows
+    // by itself once playing, and waiting would only lengthen this stall.
+    const { lead, reachesEnd } = readyLeadSec();
+    const need = rtf !== null && rtf > 0.9 ? Math.min(leadTargetSec() / 2, 15) : 0;
+    if (lead < need && !reachesEnd) {
+      setStatus('buffering');
+      void pump();
+      return;
+    }
+    rebuffering = false;
   }
 
   const c = getCtx();
@@ -280,6 +505,8 @@ function jumpToSegment(idx: number): void {
   if (!segments.length) return;
   stopSource();
   playIdx = Math.max(0, Math.min(idx, segments.length - 1));
+  rampFrom = playIdx;
+  rebuffering = false; // a deliberate jump is not an underrun
   playOffset = 0;
   evictBehind();
   void pump();
@@ -292,6 +519,7 @@ function pause(): void {
   playOffset = currentOffset();
   stopSource();
   setStatus('paused');
+  suspendAudio();
 }
 
 function resume(): void {
@@ -351,6 +579,7 @@ function changeVoice(next: string): void {
 function changeSpeed(next: number): void {
   if (!(next > 0) || next === speed) return;
   secPerChar *= speed / next; // keep time estimates sane until new samples arrive
+  shownSecPerChar *= speed / next;
   speed = next;
   invalidateAudio();
 }
@@ -363,6 +592,8 @@ function invalidateAudio(): void {
   if (!article) return; // idle: just remember the preference
   stopSource();
   playOffset = 0;
+  rampFrom = playIdx;
+  rebuffering = false;
   if (status === 'playing') setStatus('buffering');
   void pump();
   tryPlay();
@@ -404,6 +635,7 @@ function resetSession(silent = false): void {
   speechSecs.clear();
   article = null;
   segments = [];
+  rebuffering = false;
   totalChars = 0;
   playIdx = 0;
   playOffset = 0;
@@ -414,16 +646,24 @@ function resetSession(silent = false): void {
   // it just stored for the new one.
   if (silent) status = 'idle';
   else setStatus('idle');
+  if (!silent) suspendAudio();
 }
 
 function fail(message: string): void {
   stopSource();
   setStatus('error', message);
+  suspendAudio();
 }
 
 async function startSession(art: Article, v: string, s: number): Promise<void> {
   resetSession(true);
   const mine = sessionId;
+  stats.segs.length = 0;
+  speedNoted = false;
+  stats.underruns = 0;
+  stats.bufferingMs = 0;
+  startedSessionAt = performance.now();
+  firstAudioPending = true;
 
   article = art;
   voice = v;
@@ -435,15 +675,20 @@ async function startSession(art: Article, v: string, s: number): Promise<void> {
     return;
   }
   playIdx = Math.max(0, firstSegmentOfParagraph(art.startParagraph));
+  rampFrom = playIdx;
   setupMediaSession(art.title);
   getCtx();
 
   if (!isEngineReady()) {
     setStatus('loading');
     try {
+      const t0 = performance.now();
       await ensureEngine((p) => {
         if (mine === sessionId) loadProgress = p;
-      });
+      }, engineOptions());
+      stats.loadMs = performance.now() - t0;
+      stats.info = engineInfo();
+      console.log('[Lector] engine ready', JSON.stringify(stats.info), `${Math.round(stats.loadMs)}ms`);
     } catch (e) {
       console.error('[Lector] Engine load failed:', e);
       if (mine === sessionId) {
@@ -486,6 +731,7 @@ function updateMediaSession(): void {
 // ─── State snapshot ─────────────────────────────────────────────────────────
 
 function getState(): PlayerState {
+  if (status === 'playing' || shownSecPerChar === DEFAULT_SEC_PER_CHAR) shownSecPerChar = secPerChar;
   if (!article) {
     return { ...IDLE_STATE, status, voice, speed, error: errorMessage, device: engineDevice() };
   }
@@ -505,8 +751,8 @@ function getState(): PlayerState {
     paraIndex: seg?.para ?? 0,
     totalParas: article.paragraphs.length,
     progress: totalChars ? Math.min(1, charsDone / totalChars) : 0,
-    elapsed: charsDone * secPerChar,
-    remaining: known ? Math.max(0, (totalChars - charsDone) * secPerChar) : null,
+    elapsed: charsDone * shownSecPerChar,
+    remaining: known ? Math.max(0, (totalChars - charsDone) * shownSecPerChar) : null,
     loadProgress,
     device: engineDevice(),
     currentText: seg?.text ?? '',
@@ -560,7 +806,7 @@ chrome.runtime.onMessage.addListener((message: OffscreenRequest, _sender, sendRe
     case 'TTS_WARM':
       // Preload the model so the next "listen" starts instantly. Failure is
       // fine here: the real start will retry and report the error.
-      if (!isEngineReady()) void ensureEngine(() => {}).catch(() => {});
+      if (!isEngineReady()) void ensureEngine(() => {}, engineOptions()).catch(() => {});
       sendResponse({ ok: true });
       return false;
     case 'TTS_CLEAR_CACHE':

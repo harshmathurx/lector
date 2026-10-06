@@ -1,25 +1,41 @@
 // Client for the TTS engine worker (engine.worker.ts). Keeps the same small
 // surface the player uses: ensureEngine / synthesize / isEngineReady / engineDevice.
 
+export type { Device, Dtype } from './tier';
+import type { Device, Dtype } from './tier';
+
 export interface Speech {
   samples: Float32Array;
   sampleRate: number;
+  /** Time the worker spent generating (phonemize + inference). */
+  genMs: number;
+}
+
+export interface LoadOptions {
+  wasmBase: string;
+  /** Force a backend (default: WebGPU if an adapter exists, else WASM). */
+  device?: Device;
+  dtypeGpu?: Dtype;
+  dtypeWasm?: Dtype;
+  /** WASM threads (honoured only when the document is cross-origin isolated). */
+  threads?: number;
+  /** A previous session measured the GPU slower than real time (see offscreen.ts). */
+  gpuSlowBefore?: boolean;
 }
 
 export type WorkerRequest =
-  | { type: 'load'; wasmBase: string }
+  | ({ type: 'load' } & LoadOptions)
   | { type: 'generate'; id: number; text: string; voice: string; speed: number };
 
 export type WorkerResponse =
   | { type: 'progress'; fraction: number }
-  | { type: 'ready'; device: 'webgpu' | 'wasm' }
-  | { type: 'audio'; id: number; samples: Float32Array; sampleRate: number }
+  | { type: 'ready'; device: Device; dtype: Dtype; threads: number }
+  | { type: 'audio'; id: number; samples: Float32Array; sampleRate: number; genMs: number }
   | { type: 'error'; id?: number; message: string };
-
-type Device = 'webgpu' | 'wasm';
 
 let worker: Worker | null = null;
 let device: Device | null = null;
+let loadedInfo: { dtype: Dtype; threads: number } | null = null;
 let loading: Promise<void> | null = null;
 let progressListener: (fraction: number) => void = () => {};
 let nextId = 1;
@@ -28,6 +44,10 @@ let loadSettle: { resolve: () => void; reject: (e: Error) => void } | null = nul
 
 export function engineDevice(): Device | null {
   return device;
+}
+
+export function engineInfo(): { device: Device; dtype: Dtype; threads: number } | null {
+  return device && loadedInfo ? { device, ...loadedInfo } : null;
 }
 
 export function isEngineReady(): boolean {
@@ -44,12 +64,13 @@ function spawn(): Worker {
         break;
       case 'ready':
         device = m.device;
+        loadedInfo = { dtype: m.dtype, threads: m.threads };
         progressListener(1);
         loadSettle?.resolve();
         loadSettle = null;
         break;
       case 'audio':
-        pending.get(m.id)?.resolve({ samples: m.samples, sampleRate: m.sampleRate });
+        pending.get(m.id)?.resolve({ samples: m.samples, sampleRate: m.sampleRate, genMs: m.genMs });
         pending.delete(m.id);
         break;
       case 'error':
@@ -77,14 +98,14 @@ function spawn(): Worker {
 }
 
 /** Load the model once. WebGPU first, WASM as the fallback (decided in the worker). */
-export function ensureEngine(onProgress: (fraction: number) => void): Promise<void> {
+export function ensureEngine(onProgress: (fraction: number) => void, options: Omit<LoadOptions, 'wasmBase'> = {}): Promise<void> {
   progressListener = onProgress;
   if (device) return Promise.resolve();
   if (loading) return loading;
   loading = new Promise<void>((resolve, reject) => {
     loadSettle = { resolve, reject };
     worker ??= spawn();
-    const req: WorkerRequest = { type: 'load', wasmBase: chrome.runtime.getURL('wasm/') };
+    const req: WorkerRequest = { type: 'load', wasmBase: chrome.runtime.getURL('wasm/'), ...options };
     worker.postMessage(req);
   }).finally(() => {
     loading = null;
