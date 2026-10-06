@@ -286,12 +286,27 @@
     }
     .btn-secondary:hover { background: var(--wash); }
 
+    /* ─── Switch (role="switch"): track --line / --ink, knob --bg ─── */
+    .switch {
+      position: relative; flex-shrink: 0; width: 36px; height: 22px; border-radius: var(--r-pill);
+      background: var(--line); box-shadow: inset 0 0 0 1px var(--wait); transition: background .15s, box-shadow .15s;
+    }
+    .switch::after {
+      content: ''; position: absolute; top: 3px; left: 3px; width: 16px; height: 16px; border-radius: 50%;
+      background: var(--bg); box-shadow: 0 0 0 1px var(--wait); transition: transform .15s ease, box-shadow .15s;
+    }
+    .switch[aria-checked="true"] { background: var(--ink); box-shadow: none; }
+    .switch[aria-checked="true"]::after { transform: translateX(14px); box-shadow: none; }
+    .toggle-row { display: flex; align-items: center; justify-content: space-between; gap: 14px; margin-top: 14px; padding: 2px 2px 0; }
+    .toggle-row .t { font-size: 12.5px; font-weight: 500; }
+    .toggle-row .t small { display: block; font-size: 11.5px; font-weight: 400; color: var(--muted); margin-top: 1px; }
+
     /* ─── Reduced motion: no tap, shimmer, halo, crossfade or ink transition ─── */
     @media (prefers-reduced-motion: reduce) {
       .q.speaking i, .seek.playing input[type=range]::-webkit-slider-thumb, .row-btn.previewing { animation: none !important; }
       .shimmer, .shimmer * { animation: none !important; background: none !important; color: inherit !important; -webkit-text-fill-color: currentColor; }
       .status .extra { color: var(--muted) !important; }
-      .sentence, .sentence.fade, .sentence .w, .q, .sheet { transition: none !important; animation: none !important; }
+      .sentence, .sentence.fade, .sentence .w, .q, .sheet, .switch, .switch::after { transition: none !important; animation: none !important; }
     }
   </style>
 </head>
@@ -391,6 +406,11 @@
         </button>
         <div class="speed-row" data-speed-row role="group" aria-label="Speed"></div>
       </div>
+
+      <div class="toggle-row">
+        <span class="t" id="lbl-show-player">Show on page</span>
+        <button class="switch" role="switch" aria-checked="true" aria-labelledby="lbl-show-player" data-pref="showOnPage"></button>
+      </div>
     </div>
   </div>
 
@@ -414,6 +434,14 @@
       <button class="icon-btn" id="close-settings" aria-label="Close"><svg viewBox="0 0 24 24"><path d="M19 6.4L17.6 5 12 10.6 6.4 5 5 6.4 10.6 12 5 17.6 6.4 19 12 13.4 17.6 19 19 17.6 13.4 12z"/></svg></button>
     </div>
     <div class="sheet-body">
+      <div class="setting">
+        <div><div class="t" id="lbl-show">Show on page</div><div class="d">Highlight the sentence being read so you never lose your place</div></div>
+        <button class="switch" role="switch" aria-checked="true" aria-labelledby="lbl-show" data-pref="showOnPage"></button>
+      </div>
+      <div class="setting">
+        <div><div class="t" id="lbl-follow">Scroll to follow</div><div class="d">Keep the sentence on screen while it's read</div></div>
+        <button class="switch" role="switch" aria-checked="true" aria-labelledby="lbl-follow" data-pref="followScroll"></button>
+      </div>
       <div class="setting">
         <div><div class="t">Saved audio</div><div class="d" id="cache-note">Lector remembers what it has already voiced so repeat listens are instant.</div></div>
         <button class="btn-secondary" id="btn-clear-cache">Clear</button>

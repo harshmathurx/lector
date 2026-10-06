@@ -14,6 +14,7 @@ let state: PlayerState = IDLE_STATE;
 let selectedVoice = DEFAULT_VOICE;
 let selectedSpeed = 1;
 let favorites = new Set<string>();
+const pageToggles: Record<'showOnPage' | 'followScroll', boolean> = { showOnPage: true, followScroll: true };
 let starting = false; // optimistic "preparing" between click and first state
 let seeking = false;
 let previewAudio: HTMLAudioElement | null = null;
@@ -44,11 +45,39 @@ async function sendCommand(command: Command): Promise<void> {
 // ─── Prefs ──────────────────────────────────────────────────────────────────
 
 async function loadPrefs(): Promise<void> {
-  const r = await chrome.storage.local.get(['defaultVoice', 'defaultSpeed', 'favoriteVoices', 'firstRun']);
+  const r = await chrome.storage.local.get(['defaultVoice', 'defaultSpeed', 'favoriteVoices', 'firstRun', 'showOnPage', 'followScroll']);
+  pageToggles.showOnPage = r.showOnPage !== false;
+  pageToggles.followScroll = r.followScroll !== false;
+  renderSwitches();
   if (typeof r.defaultVoice === 'string' && findVoice(r.defaultVoice)) selectedVoice = r.defaultVoice;
   if (typeof r.defaultSpeed === 'number') selectedSpeed = r.defaultSpeed;
   if (Array.isArray(r.favoriteVoices)) favorites = new Set(r.favoriteVoices as string[]);
   $('first-run').classList.toggle('hidden', !r.firstRun);
+}
+
+function renderSwitches(): void {
+  $$('[data-pref]').forEach((el) => {
+    el.setAttribute('aria-checked', String(pageToggles[el.dataset.pref as keyof typeof pageToggles]));
+  });
+}
+
+/** Page-highlight switches: stored in chrome.storage.local, which the content script watches live. */
+function bindSwitches(): void {
+  $$('[data-pref]').forEach((el) => {
+    el.addEventListener('click', () => {
+      const key = el.dataset.pref as keyof typeof pageToggles;
+      pageToggles[key] = !pageToggles[key];
+      renderSwitches();
+      void chrome.storage.local.set({ [key]: pageToggles[key] });
+    });
+  });
+  chrome.storage.onChanged?.addListener((changes, area) => {
+    if (area !== 'local') return;
+    for (const key of ['showOnPage', 'followScroll'] as const) {
+      if (changes[key]) pageToggles[key] = changes[key].newValue !== false;
+    }
+    renderSwitches();
+  });
 }
 
 function savePrefs(): void {
@@ -614,6 +643,7 @@ async function init(): Promise<void> {
   await loadPrefs();
   renderVoiceCards();
   renderSpeedRows();
+  bindSwitches();
 
   chrome.tabs.query({ active: true, currentWindow: true }, (tabs) => {
     $('page-title').textContent = cleanTitle(tabs[0]?.title) || 'This page';
