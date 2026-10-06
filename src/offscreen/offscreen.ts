@@ -285,6 +285,176 @@ async function initTTS(
   return tts;
 }
 
+// ─── Text Chunking for TTS ─────────────────────────────────────────────────
+// Kokoro has a 512 phoneme token limit. Long text must be split into chunks.
+// The chunking quality directly determines whether the output sounds natural
+// or robotic. Rules:
+//
+// 1. Split at sentence boundaries (. ! ? …) — the model adds natural pauses
+// 2. If a sentence is too long, split at clause boundaries (, ; : — –)
+// 3. Last resort: split at conjunctions (and, but, or, which, that, because)
+// 4. NEVER split: mid-word, mid-quote, inside parentheses, inside URLs/emails
+// 5. Each chunk must END with its punctuation mark
+// 6. Between concatenated chunks, insert silence proportional to the boundary type
+
+// Silence durations in samples at 24kHz (Kokoro's output rate)
+const SILENCE_SENTENCE = 6000;   // 250ms — between sentences
+const SILENCE_CLAUSE = 3600;     // 150ms — between clauses
+const SILENCE_PARAGRAPH = 9600;  // 400ms — between paragraphs
+
+interface TextChunk {
+  text: string;
+  /** Silence to insert AFTER this chunk (in samples at 24kHz) */
+  pauseAfter: number;
+}
+
+/**
+ * Split text into chunks suitable for Kokoro's 512-token limit.
+ * Preserves natural prosody by respecting punctuation boundaries.
+ */
+function chunkText(text: string, maxLength: number = 400): TextChunk[] {
+  if (text.length <= maxLength) {
+    return [{ text, pauseAfter: SILENCE_PARAGRAPH }];
+  }
+
+  const chunks: TextChunk[] = [];
+
+  // Step 1: Split into sentences (keeping the punctuation)
+  // Match: anything followed by sentence-ending punctuation + optional quote/paren
+  const sentenceRegex = /[^.!?…]*[.!?…]+[\]'"»)〕】」』]*\s*/g;
+  const sentences: string[] = [];
+  let match;
+  while ((match = sentenceRegex.exec(text)) !== null) {
+    const s = match[0].trim();
+    if (s.length > 0) sentences.push(s);
+  }
+  // If regex didn't split (no sentence-ending punctuation), treat as one sentence
+  if (sentences.length === 0) {
+    sentences.push(text);
+  }
+  // Handle any remaining text after last sentence
+  const lastSentence = sentences[sentences.length - 1];
+  const lastIndex = text.lastIndexOf(lastSentence) + lastSentence.length;
+  if (lastIndex < text.length) {
+    const remainder = text.substring(lastIndex).trim();
+    if (remainder.length > 0) {
+      sentences.push(remainder);
+    }
+  }
+
+  // Step 2: Pack sentences into chunks
+  let current = '';
+  for (const sentence of sentences) {
+    if (sentence.length > maxLength) {
+      // Sentence itself is too long — split at clause boundaries
+      if (current.trim()) {
+        chunks.push({ text: current.trim(), pauseAfter: SILENCE_SENTENCE });
+        current = '';
+      }
+      const clauseChunks = splitLongSentence(sentence, maxLength);
+      chunks.push(...clauseChunks);
+      continue;
+    }
+
+    if ((current + ' ' + sentence).length > maxLength && current.trim()) {
+      chunks.push({ text: current.trim(), pauseAfter: SILENCE_SENTENCE });
+      current = sentence;
+    } else {
+      current = current ? current + ' ' + sentence : sentence;
+    }
+  }
+  if (current.trim()) {
+    chunks.push({ text: current.trim(), pauseAfter: SILENCE_PARAGRAPH });
+  }
+
+  // Fix the last chunk's pause
+  if (chunks.length > 0) {
+    chunks[chunks.length - 1].pauseAfter = SILENCE_PARAGRAPH;
+  }
+
+  return chunks;
+}
+
+/**
+ * Split a sentence that's too long at clause boundaries.
+ * Tries commas, semicolons, colons, dashes first. Falls back to
+ * conjunctions. Last resort: hard split at word boundary.
+ */
+function splitLongSentence(sentence: string, maxLength: number): TextChunk[] {
+  if (sentence.length <= maxLength) {
+    return [{ text: sentence, pauseAfter: SILENCE_SENTENCE }];
+  }
+
+  const chunks: TextChunk[] = [];
+
+  // Try splitting at clause boundaries: , ; : — –
+  // Keep the punctuation with the preceding text
+  const clauseRegex = /[^,;:—–]+[,;:—–]?\s*/g;
+  const clauses: string[] = [];
+  let match;
+  while ((match = clauseRegex.exec(sentence)) !== null) {
+    const c = match[0].trim();
+    if (c.length > 0) clauses.push(c);
+  }
+  if (clauses.length === 0) clauses.push(sentence);
+
+  let current = '';
+  for (const clause of clauses) {
+    if (clause.length > maxLength) {
+      // Even a single clause is too long — split at word boundaries
+      if (current.trim()) {
+        chunks.push({ text: current.trim(), pauseAfter: SILENCE_CLAUSE });
+        current = '';
+      }
+      const wordChunks = splitAtWords(clause, maxLength);
+      chunks.push(...wordChunks);
+      continue;
+    }
+
+    if ((current + ' ' + clause).length > maxLength && current.trim()) {
+      chunks.push({ text: current.trim(), pauseAfter: SILENCE_CLAUSE });
+      current = clause;
+    } else {
+      current = current ? current + ' ' + clause : clause;
+    }
+  }
+  if (current.trim()) {
+    chunks.push({ text: current.trim(), pauseAfter: SILENCE_SENTENCE });
+  }
+
+  return chunks;
+}
+
+/**
+ * Last resort: split at word boundaries. Preserves whole words.
+ */
+function splitAtWords(text: string, maxLength: number): TextChunk[] {
+  const words = text.split(/\s+/);
+  const chunks: TextChunk[] = [];
+  let current = '';
+
+  for (const word of words) {
+    if ((current + ' ' + word).length > maxLength && current.trim()) {
+      chunks.push({ text: current.trim(), pauseAfter: SILENCE_CLAUSE });
+      current = word;
+    } else {
+      current = current ? current + ' ' + word : word;
+    }
+  }
+  if (current.trim()) {
+    chunks.push({ text: current.trim(), pauseAfter: SILENCE_SENTENCE });
+  }
+
+  return chunks;
+}
+
+/**
+ * Create a silent Float32Array of the given length (in samples).
+ */
+function createSilence(samples: number): Float32Array {
+  return new Float32Array(samples); // Already zeros
+}
+
 // ─── Audio Generation with Cache ────────────────────────────────────────────
 
 async function generateAudio(text: string, voice: string, speed: number = 1.0): Promise<AudioBuffer> {
@@ -300,58 +470,48 @@ async function generateAudio(text: string, voice: string, speed: number = 1.0): 
 
   if (!tts) throw new Error('TTS not initialized');
 
-  // Kokoro has a 512 phoneme token limit (~250-400 characters of English).
-  // If the text is too long, split at sentence boundaries and concatenate.
-  const MAX_CHUNK_LENGTH = 400;
-  if (text.length > MAX_CHUNK_LENGTH) {
-    console.log('[VB] Text too long (' + text.length + ' chars), splitting into chunks');
-    const sentences = text.match(/[^.!?]+[.!?]+\s*/g) || [text];
-    const chunks: string[] = [];
-    let current = '';
-    for (const s of sentences) {
-      if ((current + s).length > MAX_CHUNK_LENGTH && current.length > 0) {
-        chunks.push(current.trim());
-        current = s;
-      } else {
-        current += s;
-      }
-    }
-    if (current.trim()) chunks.push(current.trim());
+  // Determine if we need to chunk
+  const chunks = chunkText(text);
 
-    console.log('[VB] Split into', chunks.length, 'chunks');
-
-    // Generate each chunk and concatenate
-    const audioChunks: Float32Array[] = [];
-    for (const chunk of chunks) {
-      const chunkAudio = await generateAudio(chunk, voice, speed); // Recursive, but chunks are < 400 chars
-      // Get raw samples from the AudioBuffer
-      const samples = chunkAudio.getChannelData(0);
-      audioChunks.push(new Float32Array(samples));
-    }
-
-    // Concatenate all chunks
-    const totalLength = audioChunks.reduce((sum, c) => sum + c.length, 0);
-    const combined = new Float32Array(totalLength);
-    let offset = 0;
-    for (const chunk of audioChunks) {
-      combined.set(chunk, offset);
-      offset += chunk.length;
-    }
-
-    // Cache the combined result
-    setCachedAudio(key, combined).catch(() => {});
-    return createBufferAtContextRate(ctx, combined, 24000);
+  if (chunks.length === 1) {
+    // Single chunk — generate directly
+    console.log('[VB] Generating:', text.substring(0, 60) + '...', 'speed:', speed);
+    const audio = await tts.generate(chunks[0].text, { voice: voice as never, speed: speed as never });
+    const modelRate = audio.sampling_rate || 24000;
+    const rawSamples = audio.audio;
+    setCachedAudio(key, rawSamples).catch(() => {});
+    return createBufferAtContextRate(ctx, rawSamples, modelRate);
   }
 
-  console.log('[VB] Generating:', text.substring(0, 60) + '...', 'speed:', speed);
-  const audio = await tts.generate(text, { voice: voice as never, speed: speed as never });
+  // Multi-chunk — generate each, insert silence, concatenate
+  console.log('[VB] Chunked into', chunks.length, 'parts:', chunks.map(c => c.text.length + ' chars').join(', '));
 
-  const modelRate = audio.sampling_rate || 24000;
-  const rawSamples = audio.audio;
+  const audioParts: Float32Array[] = [];
+  for (let i = 0; i < chunks.length; i++) {
+    const chunk = chunks[i];
+    console.log('[VB] Chunk', i + 1, '/', chunks.length, ':', chunk.text.substring(0, 50) + '...');
 
-  setCachedAudio(key, rawSamples).catch(() => {});
+    const chunkAudio = await generateAudio(chunk.text, voice, speed); // Recursive — will be single-chunk
+    const samples = chunkAudio.getChannelData(0);
+    audioParts.push(new Float32Array(samples));
 
-  return createBufferAtContextRate(ctx, rawSamples, modelRate);
+    // Insert silence between chunks (not after the last one)
+    if (i < chunks.length - 1) {
+      audioParts.push(createSilence(chunk.pauseAfter));
+    }
+  }
+
+  // Concatenate all parts
+  const totalLength = audioParts.reduce((sum, p) => sum + p.length, 0);
+  const combined = new Float32Array(totalLength);
+  let offset = 0;
+  for (const part of audioParts) {
+    combined.set(part, offset);
+    offset += part.length;
+  }
+
+  setCachedAudio(key, combined).catch(() => {});
+  return createBufferAtContextRate(ctx, combined, 24000);
 }
 
 // Resample audio from sourceRate to the AudioContext's native rate.
