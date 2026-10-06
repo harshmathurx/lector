@@ -225,15 +225,34 @@ function markPreviewing(voiceId: string): void {
   }, PREVIEW_ANIMATION_MS);
 }
 
+// Previews are pre-generated MP3 files bundled with the extension.
+// No model download or TTS engine needed — just play the file.
+let previewAudio: HTMLAudioElement | null = null;
+
 function requestPreview(voiceId: string): void {
   markPreviewing(voiceId);
-  chrome.runtime
-    .sendMessage({ type: 'TTS_PREVIEW_VOICE', data: { voice: voiceId } })
-    .catch(() => {
-      // Background may not be listening yet (offscreen cold-start) —
-      // that's fine, just clear the animation.
-      clearPreviewState();
-    });
+
+  // Stop any currently playing preview
+  if (previewAudio) {
+    previewAudio.pause();
+    previewAudio = null;
+  }
+
+  const url = chrome.runtime.getURL(`previews/${voiceId}.mp3`);
+  previewAudio = new Audio(url);
+  previewAudio.play().catch(() => {
+    clearPreviewState();
+  });
+
+  previewAudio.onended = () => {
+    clearPreviewState();
+    previewAudio = null;
+  };
+
+  previewAudio.onerror = () => {
+    clearPreviewState();
+    previewAudio = null;
+  };
 }
 
 function setVoice(voiceId: string, opts: { persist?: boolean; sync?: boolean } = {}): void {

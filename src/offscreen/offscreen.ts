@@ -820,21 +820,6 @@ chrome.runtime.onMessage.addListener(
           break;
         }
 
-        case 'TTS_PREVIEW_VOICE': {
-          const { voice } = message.data as { voice: string };
-          try {
-            await handleVoicePreview(voice);
-            chrome.runtime
-              .sendMessage({ type: 'TTS_PREVIEW_DONE', data: { voice } })
-              .catch(() => {});
-            sendResponse({ status: 'preview_done', voice });
-          } catch (e) {
-            console.error('Voice preview failed:', e);
-            sendResponse({ error: `Preview failed: ${e}` });
-          }
-          break;
-        }
-
         default:
           sendResponse({ error: `Unknown message: ${message.type}` });
       }

@@ -55,7 +55,6 @@ const BG_HANDLED = new Set([
   'VB_TOGGLE_PLAY',
   'TTS_STOP',
   'TTS_STATE_UPDATE',
-  'TTS_PREVIEW_VOICE',
 ]);
 
 chrome.runtime.onMessage.addListener(
@@ -177,18 +176,6 @@ chrome.runtime.onMessage.addListener(
             sendResponse({ ok: true });
           } catch (e) {
             sendResponse({ ok: false, reason: String(e) });
-          }
-          break;
-        }
-
-        case 'TTS_PREVIEW_VOICE': {
-          // Ensure offscreen exists before forwarding preview request
-          await ensureOffscreenDocument();
-          try {
-            const result = await chrome.runtime.sendMessage(message);
-            sendResponse(result);
-          } catch (e) {
-            sendResponse({ error: String(e) });
           }
           break;
         }
