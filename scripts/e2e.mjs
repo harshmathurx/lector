@@ -7,6 +7,7 @@
 //   # add "http://localhost/*" to $S/ext/manifest.json host_permissions
 //   echo 'globalThis.__t={startReading,getState,runCommand,hasOffscreen,loadSession};' >> $S/ext/background/background.js
 //   (cd <dir with article.html> && python3 -m http.server 8765 &)
+//   NO_GPU=1 forces the WASM fallback path.
 //   CHROME_PATH=<Chromium/Chrome for Testing binary> node scripts/e2e.mjs $S
 // Branded Google Chrome >=137 ignores --load-extension; use Chromium / Chrome for Testing.
 import { spawn } from 'node:child_process';
@@ -16,7 +17,7 @@ const PORT = 9333;
 const chrome = spawn(process.env.CHROME_PATH, [
   '--headless=new', `--remote-debugging-port=${PORT}`, `--user-data-dir=${S}/profile`,
   `--load-extension=${S}/ext`, '--autoplay-policy=no-user-gesture-required', '--no-first-run',
-  '--enable-unsafe-webgpu', '--disable-features=DisableLoadExtensionCommandLineSwitch', 'http://localhost:8765/article.html',
+  ...(process.env.NO_GPU ? ['--disable-gpu'] : ['--enable-unsafe-webgpu']), `--disable-features=DisableLoadExtensionCommandLineSwitch${process.env.NO_GPU ? ',WebGPU' : ''}`, 'http://localhost:8765/article.html',
 ], { stdio: 'ignore' });
 const log = (...a) => console.log(new Date().toISOString().slice(11, 19), ...a);
 async function targets() { return (await fetch(`http://localhost:${PORT}/json`)).json(); }
@@ -42,6 +43,7 @@ try {
   const pc = await connect(page.webSocketDebuggerUrl);
   await pc.send('Runtime.enable');
   log('tabs', await ev(bg, `chrome.tabs.query({}).then(ts=>JSON.stringify(ts.map(t=>[t.id,t.url])))`)); await sleep(1500); const tabId = await ev(bg, `chrome.tabs.query({}).then(ts=>ts[0].id)`);
+  const cmd = async (c) => { const t = Date.now(); await ev(bg, `__t.runCommand(${JSON.stringify(c)})`); log('  cmd', c.cmd, (Date.now() - t) + 'ms'); };
   const st = async () => { const s = await ev(bg, `__t.getState()`); return s; };
   const show = async (label) => { const s = await st(); log(label.padEnd(10), s.status, `para ${s.paraIndex}/${s.totalParas}`, `prog ${(s.progress*100).toFixed(0)}%`, `el ${s.elapsed.toFixed(1)}s`, `v=${s.voice} x${s.speed}`, s.device||'', s.error||'', '|', (s.currentText||'').slice(0,40)); return s; };
 
@@ -56,22 +58,22 @@ try {
   await sleep(3000); await show('playing'); log('page highlight', await hl());
   const a = await st(); await sleep(2000); const b = await st(); log('elapsed advances', a.elapsed < b.elapsed);
 
-  log('PAUSE'); await ev(bg, `__t.runCommand({cmd:'pause'})`); await sleep(500); const p1 = await show('paused'); await sleep(1500); const p2 = await st(); log('pause holds position', Math.abs(p1.elapsed - p2.elapsed) < 0.05);
-  log('RESUME'); await ev(bg, `__t.runCommand({cmd:'resume'})`); await sleep(1500); await show('resumed');
-  log('NEXT'); await ev(bg, `__t.runCommand({cmd:'next'})`); await sleep(3500); await show('next');
-  log('PREV'); await ev(bg, `__t.runCommand({cmd:'prev'})`); await sleep(3500); await show('prev');
-  log('SEEK 0.6'); await ev(bg, `__t.runCommand({cmd:'seek',progress:0.6})`); await sleep(4000); await show('seek');
-  log('SPEED 1.5'); await ev(bg, `__t.runCommand({cmd:'speed',speed:1.5})`); await sleep(5000); await show('speed');
-  log('VOICE bm_george'); await ev(bg, `__t.runCommand({cmd:'voice',voice:'bm_george'})`); await sleep(5000); await show('voice');
+  log('PAUSE'); await cmd({cmd:'pause'}); await sleep(500); const p1 = await show('paused'); await sleep(1500); const p2 = await st(); log('pause holds position', Math.abs(p1.elapsed - p2.elapsed) < 0.05);
+  log('RESUME'); await cmd({cmd:'resume'}); await sleep(1500); await show('resumed');
+  log('NEXT'); await cmd({cmd:'next'}); await sleep(3500); await show('next');
+  log('PREV'); await cmd({cmd:'prev'}); await sleep(3500); await show('prev');
+  log('SEEK 0.6'); await cmd({cmd:'seek',progress:0.6}); await sleep(4000); await show('seek');
+  log('SPEED 1.5'); await cmd({cmd:'speed',speed:1.5}); await sleep(5000); await show('speed');
+  log('VOICE bm_george'); await cmd({cmd:'voice',voice:'bm_george'}); await sleep(5000); await show('voice');
 
   log('KILL OFFSCREEN (simulate Chrome 30s close)');
   await ev(bg, `chrome.offscreen.closeDocument()`); await sleep(800);
   const dead = await show('dead');
-  log('RECOVER via toggle'); await ev(bg, `__t.runCommand({cmd:'toggle'})`);
+  log('RECOVER via toggle'); await cmd({cmd:'toggle'});
   for (let i = 0; i < 30; i++) { s = await show('recover'); if (s.status === 'playing') break; await sleep(1500); }
   log('recovered', s.status === 'playing');
 
-  log('STOP'); await ev(bg, `__t.runCommand({cmd:'stop'})`); await sleep(1000); await show('stopped');
+  log('STOP'); await cmd({cmd:'stop'}); await sleep(1000); await show('stopped');
   log('highlight cleared', await hl());
   log('DONE');
 } catch (e) { log('FAIL', e.message); }

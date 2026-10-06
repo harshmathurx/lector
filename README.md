@@ -1,72 +1,72 @@
 # Voicebox Reader
 
-Read any web article aloud with natural AI voices — running entirely in your browser. No server, no account, no data leaves your machine.
+**Listen to any web page with natural AI voices, entirely on your device.**
 
-Powered by [Kokoro 82M](https://huggingface.co/hexgrad/Kokoro-82M) TTS via [kokoro-js](https://github.com/hexgrad/kokoro) (ONNX + WebGPU/WASM).
+Install, click, listen. No account, no server, and nothing you read ever leaves your browser. Voicebox runs the [Kokoro 82M](https://huggingface.co/hexgrad/Kokoro-82M) speech model locally with WebGPU (or WASM on machines without a GPU).
+
+## Features
+
+- **Starts fast.** Audio begins after the first sentence is ready, while the rest generates ahead of you.
+- **Follows along on the page.** The sentence being read is highlighted and scrolled into view (and it stays out of your way if you scroll yourself).
+- **Read from anywhere.** Select text and right-click → *Read aloud from here*, or Alt+click any paragraph while listening.
+- **Full control.** Seek bar with time left, previous/next paragraph, 0.75×–2× speed without pitch change, 54 voices with search and favorites.
+- **Resilient.** If Chrome shuts down the audio engine, your place, voice and speed are restored when you press play.
+- **Private by design.** Uses `activeTab`, so it only touches a page when you ask it to. The only network access is the one-time model download from Hugging Face.
 
 ## Install
 
-### From source (developer)
+Chrome Web Store listing: coming soon. For now, from source:
 
 ```bash
-git clone https://github.com/YOUR_USERNAME/voicebox-extension.git
+git clone <this repository>
 cd voicebox-extension
 bun install
 bun run build
 ```
 
-Then load in Chrome:
-1. Open `chrome://extensions/`
-2. Enable **Developer mode**
-3. Click **Load unpacked** → select the `dist/` folder
+Then in Chrome: `chrome://extensions` → enable **Developer mode** → **Load unpacked** → choose the `dist/` folder.
 
-## Usage
+The first time you listen, the voice model downloads once (roughly 90 MB on CPU, larger on GPU) and is cached by the browser. After that, Voicebox works offline.
 
-1. Navigate to any article
-2. Click the extension icon → **Read Aloud** (or press `Alt+Shift+R`)
-3. First run downloads the model (~92MB, cached after that)
-4. Floating player appears bottom-right — play/pause, speed, voice
+## Using it
 
-### Controls
+| Do this | To get this |
+|---------|-------------|
+| Click the toolbar icon → **Listen to this page** | Read the whole article |
+| `Alt+Shift+R` | Start, or play/pause, from any tab |
+| `Alt+Shift+→` / `Alt+Shift+←` | Next / previous paragraph |
+| Select text → right-click → **Read aloud from here** | Start from that spot |
+| Select text → right-click → **Read only the selection aloud** | Read just the selection |
+| `Alt+click` a paragraph while listening | Jump there |
+| Hardware media keys | Play/pause, next/previous |
 
-| Control | Action |
-|---------|--------|
-| Play/Pause | Toggle playback |
-| Speed chip | Cycle 0.75x – 2x |
-| Voice chip | Pick from 19 voices (US/UK, male/female) |
-| × | Stop and close player |
-| `Alt+Shift+R` | Start reading from keyboard |
+Shortcuts can be changed at `chrome://extensions/shortcuts`.
+
+**Language note:** the English phonemizer only handles English text. Non-English voices (Japanese, Mandarin, Spanish, French, Hindi, Italian, Portuguese) are listed under *Other* and only sound right on text in their own language.
 
 ## How it works
 
 ```
-Popup (launcher)
-  → Background SW (message router, tab management)
-    → Content Script (Readability extraction, floating player UI)
-    → Offscreen Document (Kokoro TTS inference + Web Audio playback)
+Popup ──────────────┐   polls state, sends commands
+Content script ─────┤   extracts the article, highlights the spoken sentence
+Background worker ──┤   lifecycle, routing, session recovery
+Offscreen document ─┘   Kokoro TTS + Web Audio playback
 ```
 
-- **Kokoro 82M** runs in an offscreen document via ONNX Runtime Web
-- **WebGPU** on supported browsers, **WASM SIMD** fallback
-- **Mozilla Readability** extracts article text, splits into paragraphs
-- **IndexedDB** caches generated audio (24h TTL, LRU eviction at 200 entries)
-- Pre-generates next paragraph while playing current
+Articles are split into sentence-sized segments (`src/shared/chunker.ts`) that stay within Kokoro's 512-token limit. A small lookahead pump generates a few segments ahead of the playhead; each segment's pause is baked in as trailing silence, so pause, seek and skip are all segment-based. Generated audio is cached in IndexedDB. The heavy ONNX/Kokoro code is loaded lazily so a failure surfaces as an error message instead of a silently dead page. See [CLAUDE.md](CLAUDE.md) for the full architecture and design decisions.
 
 ## Development
 
 ```bash
-bun install       # install deps
-bun run build     # build to dist/
-bun run watch     # watch mode
+bun install
+bun run build         # build to dist/
+bun run watch         # rebuild on change
+bun run typecheck     # tsc --noEmit
+bun test              # unit tests (chunker, speech cleanup)
 ```
 
-### Stack
+`scripts/e2e.mjs` is a real-browser end-to-end test (loads the built extension in Chromium with the real model); its header explains the setup. See [CONTRIBUTING.md](CONTRIBUTING.md).
 
-- TypeScript, Bun (bundler)
-- [kokoro-js](https://github.com/hexgrad/kokoro) — TTS engine
-- [@mozilla/readability](https://github.com/mozilla/readability) — article extraction
-- Chrome MV3 (offscreen document, service worker, content scripts)
+## Credits and licenses
 
-## License
-
-MIT — see [LICENSE](LICENSE)
+Voicebox Reader is MIT licensed ([LICENSE](LICENSE)). It builds on [Kokoro](https://huggingface.co/hexgrad/Kokoro-82M) (Apache-2.0), [kokoro-js](https://github.com/hexgrad/kokoro) and [Transformers.js](https://github.com/huggingface/transformers.js) (Apache-2.0), [ONNX Runtime Web](https://github.com/microsoft/onnxruntime) (MIT) and [Mozilla Readability](https://github.com/mozilla/readability) (Apache-2.0). See [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).
