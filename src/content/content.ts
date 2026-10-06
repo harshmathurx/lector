@@ -237,14 +237,18 @@ function extract(mode: 'article' | 'selection' | 'fromSelection'): Article | nul
   const extracted = extractWithReadability() ?? extractFallback();
   if (!extracted) return null;
 
-  // Read the title first, as a heading, unless the article already opens with it.
+  // Read the title first, as a heading, unless the article already opens with
+  // it. Tab titles are often "Page | Site"; match and speak the best part.
   const paragraphs = extracted.paragraphs;
   const list = extracted.blocks;
   const first = paragraphs[0]?.text.toLowerCase() ?? '';
-  const hasTitleFirst = !title || first === title.toLowerCase() || title.toLowerCase().startsWith(first);
+  const parts = title.split(/\s+[|–—·•]\s+|\s+-\s+/).map((p) => p.trim()).filter(Boolean);
+  const hasTitleFirst =
+    !title || parts.some((p) => first === p.toLowerCase() || p.toLowerCase().startsWith(first) || first.startsWith(p.toLowerCase()));
   let offset = 0;
-  if (!hasTitleFirst && title.length > 2) {
-    paragraphs.unshift({ text: title, kind: 'heading' });
+  const spoken = parts.length ? parts.reduce((a, b) => (b.length > a.length ? b : a)) : title;
+  if (!hasTitleFirst && spoken.length > 2) {
+    paragraphs.unshift({ text: spoken, kind: 'heading' });
     list.unshift(null);
     offset = 1;
   }

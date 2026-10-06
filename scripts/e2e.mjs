@@ -7,6 +7,7 @@
 //   # add "http://localhost/*" to $S/ext/manifest.json host_permissions
 //   echo 'globalThis.__t={startReading,getState,runCommand,hasOffscreen,loadSession};' >> $S/ext/background/background.js
 //   (cd <dir with article.html> && python3 -m http.server 8765 &)
+//   PAGE_URL=<url> tests a real page (add its origin to the test manifest's host_permissions).
 //   NO_GPU=1 forces the WASM fallback path.
 //   CHROME_PATH=<Chromium/Chrome for Testing binary> node scripts/e2e.mjs $S
 // Branded Google Chrome >=137 ignores --load-extension; use Chromium / Chrome for Testing.
@@ -17,7 +18,7 @@ const PORT = 9333;
 const chrome = spawn(process.env.CHROME_PATH, [
   '--headless=new', `--remote-debugging-port=${PORT}`, `--user-data-dir=${S}/profile`,
   `--load-extension=${S}/ext`, '--autoplay-policy=no-user-gesture-required', '--no-first-run',
-  ...(process.env.NO_GPU ? ['--disable-gpu'] : ['--enable-unsafe-webgpu']), `--disable-features=DisableLoadExtensionCommandLineSwitch${process.env.NO_GPU ? ',WebGPU' : ''}`, 'http://localhost:8765/article.html',
+  ...(process.env.NO_GPU ? ['--disable-gpu'] : ['--enable-unsafe-webgpu']), `--disable-features=DisableLoadExtensionCommandLineSwitch${process.env.NO_GPU ? ',WebGPU' : ''}`, process.env.PAGE_URL || 'http://localhost:8765/article.html',
 ], { stdio: 'ignore' });
 const log = (...a) => console.log(new Date().toISOString().slice(11, 19), ...a);
 async function targets() { return (await fetch(`http://localhost:${PORT}/json`)).json(); }
@@ -39,7 +40,7 @@ try {
   const sw = (await targets()).find((t) => t.type === 'service_worker' && t.url.includes('background/background.js'));
   const extId = new URL(sw.url).host; log('extension', extId);
   const bg = await connect(sw.webSocketDebuggerUrl); await bg.send('Runtime.enable'); await sleep(1000);
-  const page = await waitFor(async () => (await targets()).find((t) => t.type === 'page' && t.url.includes('article.html')));
+  const page = await waitFor(async () => (await targets()).find((t) => t.type === 'page' && !t.url.startsWith('chrome') && t.url.startsWith('http')));
   const pc = await connect(page.webSocketDebuggerUrl);
   await pc.send('Runtime.enable');
   log('tabs', await ev(bg, `chrome.tabs.query({}).then(ts=>JSON.stringify(ts.map(t=>[t.id,t.url])))`)); await sleep(1500); const tabId = await ev(bg, `chrome.tabs.query({}).then(ts=>ts[0].id)`);

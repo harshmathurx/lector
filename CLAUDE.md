@@ -26,12 +26,14 @@ Content script (content.ts)           Injected ON DEMAND (activeTab). Readabilit
 │                                      the LIVE DOM (temporary data-vb-i attrs map clone→live) so we keep a text↔DOM map.
 │                                      Highlights the spoken sentence via CSS Custom Highlight API (no DOM changes),
 │                                      smart auto-scroll (yields to user scrolling), Alt+click paragraph = read from here.
-Offscreen (offscreen.ts, engine.ts, cache.ts)
+Offscreen (offscreen.ts, engine.ts, engine.worker.ts, cache.ts)
     offscreen.ts: session + player. Segments (≈sentences) → lookahead pump (4 ahead) → AudioBuffers with the pause baked
     in as trailing silence → one source at a time; pause/seek/skip are all segment based. Speed/voice change regenerates
     from the current segment. Tiny to evaluate: registers its listener first.
-    engine.ts: lazy `import()` of onnxruntime-web + kokoro-js (load failure = error state, not a dead doc). WebGPU→WASM
-    fallback at load AND at inference time. Serial inference queue.
+    engine.ts: thin client for engine.worker.ts. The worker owns the model (lazy `import()` of onnxruntime-web + kokoro-js,
+    so a load failure = error state, not a dead doc), WebGPU→WASM fallback at load AND inference time, serial queue.
+    Why a worker: on WASM, inference blocked the main thread (pause took 5-22s, voice change 15s). ORT's own proxy worker
+    can't be used in a bundle; now commands answer in <15ms on both backends and offscreen.js is ~22KB.
     cache.ts: IndexedDB, sha256(voice|speed|text) key, Float32Array values, 48h TTL, 500 entries.
 shared/: protocol.ts (types), chunker.ts (Intl.Segmenter sentence split → offsets into ORIGINAL text),
          speech.ts (display text → speakable text, applied per segment AFTER chunking), voices.ts.
@@ -87,7 +89,8 @@ cleaning (citations, URLs, emoji, dashes), unit tests (`bun test src/shared`).
 on a sample article, popup rendering (screenshots with a chrome stub).
 **Verified end to end** (`scripts/e2e.mjs`, Chromium + real Kokoro on WebGPU): model load under lazy imports, HF download with the
 narrowed host_permissions, playback, pause holds position, resume, next/prev, seek, speed, voice, on-page highlight, offscreen
-death + recovery (keeps voice/speed), stop clears highlight. Also verified on paulgraham.com/do.html (br-only markup).
+death + recovery (keeps voice/speed), stop clears highlight, on both WebGPU and forced WASM (`NO_GPU=1`). Also verified live on
+paulgraham.com/do.html (br-only markup) and worldstories.org.uk Hansel and Gretel (title "Page | Site" handled).
 **NOT verified:** audible output quality (harness is headless), mediaSession media keys, context-menu flow, Alt+click,
 the popup talking to a live background (popup was only rendered against a stub).
 
@@ -140,7 +143,7 @@ voicebox-extension/
 │   ├── popup/popup.ts          # Popup UI (polls background for state)
 │   ├── content/content.ts      # Extraction + highlight + Alt+click (injected on demand)
 │   ├── background/background.ts # Lifecycle, routing, session recovery
-│   ├── offscreen/{offscreen,engine,cache}.ts # Player/session, Kokoro engine, IDB cache
+│   ├── offscreen/{offscreen,engine,engine.worker,cache}.ts # Player/session, engine client, Kokoro worker, IDB cache
 │   └── shared/                 # protocol, chunker, speech, voices (+ tests)
 ├── static/
 │   ├── manifest.json           # Chrome MV3 manifest
@@ -150,6 +153,7 @@ voicebox-extension/
 │   ├── previews/               # Voice preview MP3s (54 files)
 │   └── wasm/                   # ONNX Runtime WASM files
 ├── scripts/
+│   ├── e2e.mjs                 # Real-browser end-to-end test (see header)
 │   └── generate-previews.py    # Generates voice preview MP3s
 ├── package.json
 ├── tsconfig.json
@@ -174,25 +178,3 @@ Commands: toggle/pause/resume/stop/next/prev/seek/jump/voice/speed.
 ```
 
 WASM files from `onnxruntime-web` are bundled locally in `static/wasm/` because Chrome extensions can't load modules from CDN in offscreen documents.
-
-## Commit History
-
-```
-5148d37 fix: pause/resume deadlock + paragraph break pauses
-adb5719 feat: proper TTS text chunking with prosody-aware splitting
-dd20c1c docs: add CLAUDE.md with full project context for AI-assisted development
-3e44f6a fix: long paragraph chunking, non-English voice warning, popup error suppression
-464cbb3 fix: handle long paragraphs and add generation error logging
-f2ef3af fix: speed uses Kokoro's built-in speed param (no pitch shift), popup error on open
-fdf1d2b fix: pause/resume position tracking, voice/speed change restart
-edc9704 refactor: remove floating DOM player, all controls in extension popup
-471a024 fix: eliminate offscreen race condition via storage-based job queue
-e6c6ac1 fix: offscreen document race condition — TTS_START was lost
-d060eb7 fix: player clicks dead (pointer-events:none), voice ordering, debug logging
-b3dd0e5 fix: add host_permissions for content script injection
-43d9742 feat: 54 voices, voice previews, draggable pill player, seek support
-65da90b feat: pre-generated voice preview clips (54 voices, 1.3MB total)
-78e56b6 fix: speed changes apply live, voice switching restarts playback
-df61302 docs: add LICENSE (MIT) and README
-26ba8bb feat: Chrome extension for article TTS with Kokoro in-browser
-```
