@@ -18,8 +18,8 @@ let starting = false; // optimistic "preparing" between click and first state
 let seeking = false;
 let previewAudio: HTMLAudioElement | null = null;
 let previewingId: string | null = null;
-type VoiceTab = 'english' | 'us' | 'uk' | 'favorites' | 'other';
-let voiceTab: VoiceTab = 'english';
+type VoiceTab = 'all' | 'us' | 'uk' | 'favorites';
+let voiceTab: VoiceTab = 'all';
 let errorTimer: ReturnType<typeof setTimeout> | null = null;
 
 // ─── Messaging ──────────────────────────────────────────────────────────────
@@ -123,11 +123,10 @@ function setVoice(id: string): void {
 // ─── Voice sheet ────────────────────────────────────────────────────────────
 
 const TABS: { id: VoiceTab; label: string }[] = [
-  { id: 'english', label: 'English' },
+  { id: 'all', label: 'All' },
   { id: 'us', label: 'US' },
   { id: 'uk', label: 'UK' },
   { id: 'favorites', label: '★ Favorites' },
-  { id: 'other', label: 'Other' },
 ];
 
 function renderVoiceTabs(): void {
@@ -148,11 +147,10 @@ function renderVoiceTabs(): void {
 
 function voiceMatchesTab(v: Voice): boolean {
   switch (voiceTab) {
-    case 'english': return v.lang === 'en';
-    case 'us': return v.lang === 'en' && v.region === 'US';
-    case 'uk': return v.lang === 'en' && v.region === 'UK';
+    case 'all': return true;
+    case 'us': return v.region === 'US';
+    case 'uk': return v.region === 'UK';
     case 'favorites': return favorites.has(v.id);
-    case 'other': return v.lang !== 'en';
   }
 }
 
@@ -226,12 +224,6 @@ function renderVoiceList(): void {
     (v) => voiceMatchesTab(v) && (!q || `${v.name} ${v.region} ${v.lang} ${v.vibe ?? ''}`.toLowerCase().includes(q))
   );
 
-  if (voiceTab === 'other') {
-    const note = document.createElement('div');
-    note.className = 'note';
-    note.textContent = 'These voices only read text written in their own language. They will sound garbled on English pages.';
-    list.appendChild(note);
-  }
   if (!matches.length) {
     const empty = document.createElement('div');
     empty.className = 'note';
@@ -240,7 +232,7 @@ function renderVoiceList(): void {
     return;
   }
 
-  const favs = voiceTab === 'favorites' || voiceTab === 'other' ? [] : matches.filter((v) => favorites.has(v.id));
+  const favs = voiceTab === 'favorites' ? [] : matches.filter((v) => favorites.has(v.id));
   const rest = matches.filter((v) => !favs.includes(v));
   const group = (label: string, voices: Voice[]) => {
     if (!voices.length) return;

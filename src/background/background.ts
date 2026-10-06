@@ -14,7 +14,7 @@ import type {
   StoredSession,
 } from '../shared/protocol';
 import { IDLE_STATE } from '../shared/protocol';
-import { DEFAULT_VOICE } from '../shared/voices';
+import { DEFAULT_VOICE, findVoice } from '../shared/voices';
 
 const OFFSCREEN_URL = 'offscreen/offscreen.html';
 const IDLE_CLOSE_ALARM = 'vb-close-offscreen';
@@ -90,7 +90,8 @@ async function closeOffscreen(): Promise<void> {
 async function getPrefs(): Promise<{ voice: string; speed: number }> {
   const r = await chrome.storage.local.get(['defaultVoice', 'defaultSpeed']);
   return {
-    voice: typeof r.defaultVoice === 'string' ? r.defaultVoice : DEFAULT_VOICE,
+    // Ignore saved voices we no longer offer (e.g. from before v0.2.1).
+    voice: typeof r.defaultVoice === 'string' && findVoice(r.defaultVoice) ? r.defaultVoice : DEFAULT_VOICE,
     speed: typeof r.defaultSpeed === 'number' && r.defaultSpeed > 0 ? r.defaultSpeed : 1,
   };
 }

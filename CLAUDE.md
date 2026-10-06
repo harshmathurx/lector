@@ -51,27 +51,20 @@ the likely cause of old bug "offscreen sometimes doesn't load". Mitigated by ses
 - We use `kokoro-js` npm package (wraps transformers.js + ONNX Runtime Web)
 - 512 phoneme token context limit (~250-400 chars of English text)
 - Speed parameter built into the model — adjusts tempo WITHOUT pitch shift
-- 54 voices across 9 languages (US, UK, JP, CN, ES, FR, IN, IT, BR)
+- The model has 54 voices in 9 languages, but **kokoro-js only registers the 28 US/UK English ones** (its voice table). The other 26 throw `Voice "x" not found` before text is even read, so we ship only the 28.
 - Voice files are `.bin` embeddings (511×256 float32) fetched from HuggingFace
-- **IMPORTANT:** The phonemizer (G2P) only supports English. Non-English voices ONLY work with text in their language. Using a Japanese voice on English text produces garbage.
+- **IMPORTANT:** kokoro-js's phonemizer is an English-only espeak-ng build (8 `en*` voices; `es`, `fr-fr`, `hi`, `it`, `pt-br`, `cmn` throw "Invalid language identifier"). Non-English needs a multilingual phonemizer (full espeak-ng wasm; ja/zh need misaki-style G2P) + `generate_from_ids`. Not done.
 
 ## Voice Catalog
 
-54 voices total. Key ones:
+28 usable voices (English). Key ones:
 - Best quality: `af_heart` (A grade), `af_bella` (A- grade)
 - US Female: Heart, Alloy, Aoede, Bella, Jessica, Kore, Nicole, Nova, River, Sarah, Sky
 - US Male: Adam, Echo, Eric, Fenrir, Liam, Michael, Onyx, Puck, Santa
 - UK Female: Alice, Emma, Isabella, Lily
 - UK Male: Daniel, Fable, George, Lewis
-- Japanese: Alpha, Gongitsune, Nezumi, Tebukuro (F), Kumo (M)
-- Mandarin: Xiaobei, Xiaoni, Xiaoxiao, Xiaoyi (F), Yunjian, Yunxi, Yunxia, Yunyang (M)
-- Spanish: Dora (F), Alex, Santa (M)
-- French: Siwis (F)
-- Hindi: Alpha, Beta (F), Omega, Psi (M)
-- Italian: Sara (F), Nicola (M)
-- Brazilian Portuguese: Dora (F), Alex, Santa (M)
 
-Voice previews: 54 pre-generated MP3 files (~25KB each, 1.3MB total) in `static/previews/`. Generated via the Voicebox Python backend. Each says "Hi, I'm [name], and I'll be reading to you."
+Voice previews: 28 pre-generated MP3 files (~25KB each) in `static/previews/`. Generated via the Voicebox Python backend. Each says "Hi, I'm [name], and I'll be reading to you."
 
 ## Status (v0.2)
 
@@ -96,7 +89,7 @@ the popup talking to a live background (popup was only rendered against a stub).
 
 ## Open / next
 - Speed change regenerates (cached after first time). Could pre-generate neighbors.
-- Non-English pages: phonemizer is English-only; no automatic voice/lang handling yet.
+- Non-English pages/voices: unsupported (see Model section). Spanish/French/etc. pages read with an English voice sound wrong; consider a clear notice on non-`en` pages.
 - No per-site extraction tuning (some SPAs/Substack variants may need fallbacks).
 - Chrome Web Store assets/listing, onboarding page.
 
@@ -150,7 +143,7 @@ voicebox-extension/
 │   ├── popup/popup.html        # Popup UI markup + styles
 │   ├── offscreen/offscreen.html # Offscreen entry point
 │   ├── icons/                  # Extension icons
-│   ├── previews/               # Voice preview MP3s (54 files)
+│   ├── previews/               # Voice preview MP3s (28 files)
 │   └── wasm/                   # ONNX Runtime WASM files
 ├── scripts/
 │   ├── e2e.mjs                 # Real-browser end-to-end test (see header)

@@ -1,5 +1,7 @@
-// Voice catalog. Kokoro's English phonemizer only handles English text, so
-// non-English voices are kept behind an "Other languages" filter.
+// Voice catalog: the 28 voices kokoro-js can actually run. Its voice table and
+// phonemizer (an English-only espeak-ng build) cover American and British
+// English only; the model's other 26 voices (ja, zh, es, fr, hi, it, pt) are
+// rejected with "Voice not found". Re-add them with a multilingual phonemizer.
 
 export interface Voice {
   id: string;
@@ -41,33 +43,6 @@ export const VOICES: Voice[] = [
   { id: 'bm_fable', name: 'Fable', region: 'UK', gender: 'M', lang: 'en' },
   { id: 'bm_daniel', name: 'Daniel', region: 'UK', gender: 'M', lang: 'en' },
   { id: 'bm_lewis', name: 'Lewis', region: 'UK', gender: 'M', lang: 'en' },
-  // Non-English: these only sound right on text in their own language.
-  { id: 'jf_alpha', name: 'Alpha', region: 'JP', gender: 'F', lang: 'ja' },
-  { id: 'jf_gongitsune', name: 'Gongitsune', region: 'JP', gender: 'F', lang: 'ja' },
-  { id: 'jf_nezumi', name: 'Nezumi', region: 'JP', gender: 'F', lang: 'ja' },
-  { id: 'jf_tebukuro', name: 'Tebukuro', region: 'JP', gender: 'F', lang: 'ja' },
-  { id: 'jm_kumo', name: 'Kumo', region: 'JP', gender: 'M', lang: 'ja' },
-  { id: 'zf_xiaobei', name: 'Xiaobei', region: 'CN', gender: 'F', lang: 'zh' },
-  { id: 'zf_xiaoni', name: 'Xiaoni', region: 'CN', gender: 'F', lang: 'zh' },
-  { id: 'zf_xiaoxiao', name: 'Xiaoxiao', region: 'CN', gender: 'F', lang: 'zh' },
-  { id: 'zf_xiaoyi', name: 'Xiaoyi', region: 'CN', gender: 'F', lang: 'zh' },
-  { id: 'zm_yunjian', name: 'Yunjian', region: 'CN', gender: 'M', lang: 'zh' },
-  { id: 'zm_yunxi', name: 'Yunxi', region: 'CN', gender: 'M', lang: 'zh' },
-  { id: 'zm_yunxia', name: 'Yunxia', region: 'CN', gender: 'M', lang: 'zh' },
-  { id: 'zm_yunyang', name: 'Yunyang', region: 'CN', gender: 'M', lang: 'zh' },
-  { id: 'ef_dora', name: 'Dora', region: 'ES', gender: 'F', lang: 'es' },
-  { id: 'em_alex', name: 'Alex', region: 'ES', gender: 'M', lang: 'es' },
-  { id: 'em_santa', name: 'Santa', region: 'ES', gender: 'M', lang: 'es' },
-  { id: 'ff_siwis', name: 'Siwis', region: 'FR', gender: 'F', lang: 'fr' },
-  { id: 'hf_alpha', name: 'Alpha', region: 'IN', gender: 'F', lang: 'hi' },
-  { id: 'hf_beta', name: 'Beta', region: 'IN', gender: 'F', lang: 'hi' },
-  { id: 'hm_omega', name: 'Omega', region: 'IN', gender: 'M', lang: 'hi' },
-  { id: 'hm_psi', name: 'Psi', region: 'IN', gender: 'M', lang: 'hi' },
-  { id: 'if_sara', name: 'Sara', region: 'IT', gender: 'F', lang: 'it' },
-  { id: 'im_nicola', name: 'Nicola', region: 'IT', gender: 'M', lang: 'it' },
-  { id: 'pf_dora', name: 'Dora', region: 'BR', gender: 'F', lang: 'pt' },
-  { id: 'pm_alex', name: 'Alex', region: 'BR', gender: 'M', lang: 'pt' },
-  { id: 'pm_santa', name: 'Santa', region: 'BR', gender: 'M', lang: 'pt' },
 ];
 
 export const DEFAULT_VOICE = 'af_heart';

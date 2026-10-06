@@ -9,7 +9,7 @@ Install, click, listen. No account, no server, and nothing you read ever leaves 
 - **Starts fast.** Audio begins after the first sentence is ready, while the rest generates ahead of you.
 - **Follows along on the page.** The sentence being read is highlighted and scrolled into view (and it stays out of your way if you scroll yourself).
 - **Read from anywhere.** Select text and right-click → *Read aloud from here*, or Alt+click any paragraph while listening.
-- **Full control.** Seek bar with time left, previous/next paragraph, 0.75×–2× speed without pitch change, 54 voices with search and favorites.
+- **Full control.** Seek bar with time left, previous/next paragraph, 0.75×–2× speed without pitch change, 28 English voices (US and UK) with search and favorites.
 - **Resilient.** If Chrome shuts down the audio engine, your place, voice and speed are restored when you press play.
 - **Private by design.** Uses `activeTab`, so it only touches a page when you ask it to. The only network access is the one-time model download from Hugging Face.
 
@@ -42,7 +42,7 @@ The first time you listen, the voice model downloads once (roughly 90 MB on CPU,
 
 Shortcuts can be changed at `chrome://extensions/shortcuts`.
 
-**Language note:** the English phonemizer only handles English text. Non-English voices (Japanese, Mandarin, Spanish, French, Hindi, Italian, Portuguese) are listed under *Other* and only sound right on text in their own language.
+**Language note:** English only for now. The speech library behind Voicebox supports only American and British English voices and an English phonemizer, so pages in other languages will not read well. Multilingual support is on the roadmap.
 
 ## How it works
 
