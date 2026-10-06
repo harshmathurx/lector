@@ -4,6 +4,8 @@
 
 A Chrome extension that reads any web article aloud with natural AI voices. Built for regular people — not developers, not AI enthusiasts. The person who has 47 tabs of articles they want to read but can't focus long enough. The person with ADHD who absorbs better by listening. The person who wants to hear a Substack post while cooking.
 
+**Language support: English only (28 US/UK voices).** State this wherever the product is described. Multilingual is deferred (last on the roadmap).
+
 **Core principles:**
 - Zero setup. Install, click, listen.
 - No server. No account. No data leaves the browser.

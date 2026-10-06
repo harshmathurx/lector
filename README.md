@@ -2,7 +2,7 @@
 
 **Listen to any web page with natural AI voices, entirely on your device.**
 
-Install, click, listen. No account, no server, and nothing you read ever leaves your browser. Voicebox runs the [Kokoro 82M](https://huggingface.co/hexgrad/Kokoro-82M) speech model locally with WebGPU (or WASM on machines without a GPU).
+Install, click, listen. **English only for now** (American and British voices). No account, no server, and nothing you read ever leaves your browser. Voicebox runs the [Kokoro 82M](https://huggingface.co/hexgrad/Kokoro-82M) speech model locally with WebGPU (or WASM on machines without a GPU).
 
 ## Features
 
@@ -42,7 +42,7 @@ The first time you listen, the voice model downloads once (roughly 90 MB on CPU,
 
 Shortcuts can be changed at `chrome://extensions/shortcuts`.
 
-**Language note:** English only for now. The speech library behind Voicebox supports only American and British English voices and an English phonemizer, so pages in other languages will not read well. Multilingual support is on the roadmap.
+**Language support:** English only. Voicebox reads English pages with 28 American and British voices. Other languages are not supported yet and will not read well.
 
 ## How it works
 

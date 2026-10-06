@@ -2,7 +2,7 @@
   "manifest_version": 3,
   "name": "Voicebox Reader",
   "version": "0.2.0",
-  "description": "Read any article aloud with natural AI voices. Powered by Kokoro TTS running locally in your browser.",
+  "description": "Read any English article aloud with natural AI voices. Powered by Kokoro TTS running locally in your browser.",
   "permissions": [
     "activeTab",
     "scripting",
