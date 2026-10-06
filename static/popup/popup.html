@@ -47,8 +47,13 @@
       }
     }
 
-    html, body { background: var(--bg); }
+    /* Chrome draws the popup in a rounded frame. Leave the page transparent so
+       the frame shows at the corners, and paint our panel with the same radius
+       so no sharp rectangle peeks out (most visible in dark mode). */
+    :root { color-scheme: light dark; }
+    html { background: transparent; }
     body {
+      background: var(--bg); border-radius: var(--r-frame, 12px);
       width: 380px; min-height: 500px; position: relative; overflow: hidden;
       font-family: var(--ui); font-size: 13px; color: var(--ink); -webkit-font-smoothing: antialiased;
     }
@@ -233,7 +238,7 @@
 
     /* ─── Sheets (voice picker, settings) ─── */
     .sheet {
-      position: absolute; inset: 0; background: var(--bg); z-index: 10;
+      position: absolute; inset: 0; background: var(--bg); z-index: 10; border-radius: inherit;
       display: flex; flex-direction: column; animation: slide .18s ease;
     }
     @keyframes slide { from { transform: translateY(12px); opacity: 0; } }
