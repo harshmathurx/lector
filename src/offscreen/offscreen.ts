@@ -300,10 +300,50 @@ async function generateAudio(text: string, voice: string, speed: number = 1.0): 
 
   if (!tts) throw new Error('TTS not initialized');
 
-  console.log('[VB] Generating:', text.substring(0, 40) + '...', 'speed:', speed);
-  // Pass speed to Kokoro — it adjusts the model's inference directly,
-  // so the output is faster/slower WITHOUT pitch shift. This is the
-  // correct way to change TTS speed (unlike playbackRate which shifts pitch).
+  // Kokoro has a 512 phoneme token limit (~250-400 characters of English).
+  // If the text is too long, split at sentence boundaries and concatenate.
+  const MAX_CHUNK_LENGTH = 400;
+  if (text.length > MAX_CHUNK_LENGTH) {
+    console.log('[VB] Text too long (' + text.length + ' chars), splitting into chunks');
+    const sentences = text.match(/[^.!?]+[.!?]+\s*/g) || [text];
+    const chunks: string[] = [];
+    let current = '';
+    for (const s of sentences) {
+      if ((current + s).length > MAX_CHUNK_LENGTH && current.length > 0) {
+        chunks.push(current.trim());
+        current = s;
+      } else {
+        current += s;
+      }
+    }
+    if (current.trim()) chunks.push(current.trim());
+
+    console.log('[VB] Split into', chunks.length, 'chunks');
+
+    // Generate each chunk and concatenate
+    const audioChunks: Float32Array[] = [];
+    for (const chunk of chunks) {
+      const chunkAudio = await generateAudio(chunk, voice, speed); // Recursive, but chunks are < 400 chars
+      // Get raw samples from the AudioBuffer
+      const samples = chunkAudio.getChannelData(0);
+      audioChunks.push(new Float32Array(samples));
+    }
+
+    // Concatenate all chunks
+    const totalLength = audioChunks.reduce((sum, c) => sum + c.length, 0);
+    const combined = new Float32Array(totalLength);
+    let offset = 0;
+    for (const chunk of audioChunks) {
+      combined.set(chunk, offset);
+      offset += chunk.length;
+    }
+
+    // Cache the combined result
+    setCachedAudio(key, combined).catch(() => {});
+    return createBufferAtContextRate(ctx, combined, 24000);
+  }
+
+  console.log('[VB] Generating:', text.substring(0, 60) + '...', 'speed:', speed);
   const audio = await tts.generate(text, { voice: voice as never, speed: speed as never });
 
   const modelRate = audio.sampling_rate || 24000;
@@ -442,17 +482,30 @@ async function playbackLoop(): Promise<void> {
       broadcastState();
 
       try {
+        const text = paragraphs[currentParagraphIndex];
+        console.log('[VB] Generating paragraph', currentParagraphIndex + 1, '/', paragraphs.length, '—', text.length, 'chars');
         const generated = await generateAudio(
-          paragraphs[currentParagraphIndex],
+          text,
           state.voice,
           state.speed
         );
         audioQueue[currentParagraphIndex] = generated;
       } catch (e) {
-        console.error('TTS generation failed:', e);
-        state.error = `Failed on paragraph ${currentParagraphIndex + 1}`;
+        const failedText = paragraphs[currentParagraphIndex]?.substring(0, 200) || '';
+        console.error('[VB] Generation failed on paragraph', currentParagraphIndex + 1, ':', e);
+        console.error('[VB] Failed text preview:', failedText);
+        console.error('[VB] Text length:', paragraphs[currentParagraphIndex]?.length, 'chars');
+        state.error = `Skipped paragraph ${currentParagraphIndex + 1}`;
         state.status = 'error';
         broadcastState();
+        // Clear error after 2 seconds and continue
+        setTimeout(() => {
+          if (state.error?.startsWith('Skipped paragraph')) {
+            state.error = undefined;
+            if (isPlaying) state.status = 'playing';
+            broadcastState();
+          }
+        }, 2000);
         currentParagraphIndex++;
         continue;
       }
