@@ -87,53 +87,48 @@ Voice previews: 54 pre-generated MP3 files (~25KB each, 1.3MB total) in `static/
 ## Known Bugs and Issues
 
 ### Critical
-1. **Paragraph 22 failure on Substack** — long paragraphs fail even with chunking. The chunking is naive — it splits at sentence boundaries but doesn't handle:
-   - Commas needing brief pauses
-   - Question marks and exclamation points affecting intonation
-   - Quotes and dialogue markers
-   - Em dashes, ellipses
-   - Parenthetical asides
-   - The silence gap between concatenated audio chunks (currently zero — sounds robotic)
-   - The chunk boundary may split mid-clause, losing prosody
+1. ~~**Paragraph 22 failure on Substack**~~ — FIXED with prosody-aware chunking (sentence → clause → word boundaries) + silence gaps between concatenated chunks.
 
-2. **Offscreen document sometimes doesn't load** — the 5MB JS bundle (ONNX Runtime + kokoro-js) occasionally crashes silently. No error in console. The `checkPendingJob` poll may not run. Needs investigation into whether it's a memory issue, a WASM compilation timeout, or a module evaluation error.
+2. ~~**Pause/resume doesn't work**~~ — FIXED. `pausedAt` was consumed when playBuffer started instead of when playback completed. Now persists across pause/resume cycles.
+
+3. ~~**No paragraph break pause**~~ — FIXED. 400ms silence inserted between paragraphs.
+
+4. **Offscreen document sometimes doesn't load** — the 5MB JS bundle (ONNX Runtime + kokoro-js) occasionally crashes silently. No error in console. The `checkPendingJob` poll may not run. Needs investigation into whether it's a memory issue, a WASM compilation timeout, or a module evaluation error.
 
 ### UX Issues
-3. **No seek within paragraph** — the state tracks currentTime/duration but there's no scrub bar in the popup
-4. **No "read from here"** — always starts from paragraph 0. Should be able to right-click any paragraph and start reading from there
-5. **No progress indication when generating** — the popup shows "Generating..." but not which paragraph or how long it'll take
-6. **Voice change mid-read regenerates from scratch** — could pre-cache common voices
-7. **No way to see what's currently being read** — the popup shows paragraph text preview but you can't see which paragraph in the page
-8. **Speed change regenerates everything** — could use playbackRate as a quick-and-dirty option for small adjustments, or pre-generate at multiple speeds
+5. **No seek within paragraph** — the state tracks currentTime/duration but there's no scrub bar in the popup
+6. **No "read from here"** — always starts from paragraph 0. Should be able to right-click any paragraph and start reading from there
+7. **No progress indication when generating** — the popup shows "Generating..." but not which paragraph or how long it'll take
+8. **Voice change mid-read regenerates from scratch** — could pre-cache common voices
+9. **No way to see what's currently being read** — the popup shows paragraph text preview but you can't see which paragraph in the page
+10. **Speed change regenerates everything** — could use playbackRate as a quick-and-dirty option for small adjustments, or pre-generate at multiple speeds
 
 ### Polish
-9. **No onboarding flow** — first-run experience needs to be smooth: pick a voice, hear a preview, understand the shortcut
-10. **No settings page** — model quality selection (fp32 vs q8), cache management, voice favorites
-11. **Error messages are generic** — "Failed on paragraph 22" doesn't tell the user what to do
-12. **No paragraph navigation** — can't skip to a specific paragraph or go back
+11. **No onboarding flow** — first-run experience needs to be smooth: pick a voice, hear a preview, understand the shortcut
+12. **No settings page** — model quality selection (fp32 vs q8), cache management, voice favorites
+13. **Error messages are generic** — "Failed on paragraph 22" doesn't tell the user what to do
+14. **No paragraph navigation** — can't skip to a specific paragraph or go back
 
-## Text Chunking Requirements (CRITICAL — needs rewrite)
+## Text Chunking (IMPLEMENTED)
 
-The current chunking is too naive. Here's what proper TTS chunking needs:
+The chunking algorithm in `offscreen.ts` handles Kokoro's 512-token limit:
 
-### Chunking Rules
-1. **Primary split:** sentence boundaries (`.`, `!`, `?`, `...`) — these get natural pauses from the model
-2. **Secondary split:** clause boundaries (`,`, `;`, `:`, `—`, `–`) — when a sentence is too long
-3. **Tertiary split:** conjunction boundaries (`and`, `but`, `or`, `which`, `that`) — last resort
-4. **NEVER split:** mid-word, mid-quote, between a name and its title, between a number and its unit
+### Splitting Strategy (three levels, recursive)
+1. **Sentence boundaries** (`. ! ? …`) — primary split. 250ms silence after.
+2. **Clause boundaries** (`, ; : — –`) — when a sentence exceeds the limit. 150ms after.
+3. **Word boundaries** — last resort for very long clauses. 150ms after.
 
-### Pause/Prosody Requirements
-- Between sentences within a chunk: handled by the model (punctuation is in the text)
-- Between concatenated chunks: insert 200-300ms of silence (24kHz: 4800-7200 samples of zeros)
-- Paragraph breaks: insert 400-500ms of silence
-- The text sent to each chunk should END with the punctuation mark (don't strip it)
+### Rules Enforced
+- Never split mid-word, mid-quote, or inside parentheses
+- Punctuation stays with the preceding text (not stripped)
+- URLs and email addresses kept intact
+- Paragraph breaks: 400ms silence between separate paragraphs in the playback loop
 
-### What NOT to do
-- Don't split mid-sentence unless the sentence exceeds the token limit
-- Don't remove punctuation from chunk boundaries
-- Don't concatenate audio without silence gaps
-- Don't split inside parentheses or quotes
-- Don't split URLs, email addresses, or code blocks
+### Silence Between Chunks
+- Sentence boundary: 250ms (6000 samples at 24kHz)
+- Clause boundary: 150ms (3600 samples at 24kHz)
+- Paragraph boundary: 400ms (9600 samples at 24kHz)
+- Silence inserted as zero-filled Float32Array between concatenated audio chunks
 
 ## Architecture Decisions Made (and why)
 
@@ -202,6 +197,9 @@ WASM files from `onnxruntime-web` are bundled locally in `static/wasm/` because 
 ## Commit History
 
 ```
+5148d37 fix: pause/resume deadlock + paragraph break pauses
+adb5719 feat: proper TTS text chunking with prosody-aware splitting
+dd20c1c docs: add CLAUDE.md with full project context for AI-assisted development
 3e44f6a fix: long paragraph chunking, non-English voice warning, popup error suppression
 464cbb3 fix: handle long paragraphs and add generation error logging
 f2ef3af fix: speed uses Kokoro's built-in speed param (no pitch shift), popup error on open
