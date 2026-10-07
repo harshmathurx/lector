@@ -22,8 +22,8 @@ Inspiration: [Voicebox](https://github.com/jamiepine/voicebox) by Jamie Pine. Le
 Chrome Web Store listing: coming soon. For now, from source:
 
 ```bash
-git clone <this repository>
-cd voicebox-extension
+git clone https://github.com/harshmathurx/lector.git
+cd lector
 bun install
 bun run build
 ```
