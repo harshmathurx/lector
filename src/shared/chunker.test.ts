@@ -240,7 +240,7 @@ describe('pauses', () => {
   test('forced split gets the smallest pause, comma the clause pause', () => {
     const w = Array.from({ length: 120 }, () => 'alpha').join(' ');
     expect(chunkParagraph(w, 'text')[0].pauseMs).toBe(PAUSE_FORCED_MS);
-    const c = Array.from({ length: 12 }, () => 'alpha beta gamma delta epsilon').join(', ');
+    const c = Array.from({ length: 20 }, () => 'alpha beta gamma delta epsilon').join(', ');
     expect(chunkParagraph(c, 'text')[0].pauseMs).toBe(PAUSE_CLAUSE_MS);
   });
 });
