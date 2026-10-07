@@ -13,6 +13,7 @@ Inspiration: [Voicebox](https://github.com/jamiepine/voicebox) by Jamie Pine. Le
 ## Features
 
 - **Natural voices.** 28 American and British English voices with instant previews and favourites.
+- **Reads like a person.** Speaks in whole sentences, even in all-lowercase posts, and says numbers the way you would: "$2.5M" is "two point five million dollars", "2026-10-07" is "October 7, 2026", "World War II" is "World War Two".
 - **Follow along, word by word.** The sentence being read is highlighted on the page and the spoken words are underlined as they're read, so you never lose your place. Pause and keep reading yourself any time. Turn it off with **Show on page**.
 - **Start anywhere.** Select text → right-click → **Listen from here**, press `Alt+Shift+H`, or Alt+click a paragraph while listening.
 - **Full control.** Seek bar with time left, previous/next paragraph, 0.75×–2× speed without pitch change, media keys and your computer's Now Playing controls.
@@ -69,7 +70,7 @@ Background worker ──┤   lifecycle, routing, session recovery
 Offscreen document ─┘   Kokoro TTS + Web Audio playback
 ```
 
-Articles are split into sentence-sized segments (`src/shared/chunker.ts`) that stay within Kokoro's 512-token limit. A small lookahead pump generates a few segments ahead of the playhead; each segment's pause is baked in as trailing silence, so pause, seek and skip are all segment-based. Generated audio is cached in IndexedDB. The heavy ONNX/Kokoro code is loaded lazily so a failure surfaces as an error message instead of a silently dead page. See [CLAUDE.md](CLAUDE.md) for the full architecture and design decisions.
+Articles are split into whole-sentence segments (`src/shared/chunker.ts`); over-long sentences break at the most natural phrase boundary, and the engine splits anything still over Kokoro's 510-token limit instead of truncating it. Each segment is then normalized for speech (`src/shared/normalize.ts`: currency, dates, units, Roman numerals, acronyms). A small lookahead pump generates a few segments ahead of the playhead; each segment's pause is baked in as trailing silence, so pause, seek and skip are all segment-based. Generated audio is cached in IndexedDB. The heavy ONNX/Kokoro code is loaded lazily so a failure surfaces as an error message instead of a silently dead page. See [CLAUDE.md](CLAUDE.md) for the full architecture and design decisions.
 
 ## Development
 

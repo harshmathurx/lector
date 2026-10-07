@@ -26,7 +26,7 @@ Spec: `scratchpad/05-axf-build-spec.md` (git-ignored; copy the essentials here i
 - Motion carries meaning (no colour to do it): ink-in words in the popup sentence (driven by `PlayerState.segProgress`, interpolated with rAF), a growing underline on the page (`lector-read`) over a neutral sentence wash (`lector-seg`), the "speaking" quote icon, shimmer for preparing states. All off under reduced motion.
 - Copy: one plain status line; no jargon outside Settings; errors say what happened and what to do.
 
-## Current Architecture (v0.3)
+## Current Architecture (v0.4)
 
 ```
 Popup (popup.html + popup.ts)         ONLY UI. Holds no playback state: polls background `VB_GET_STATE` every 300ms
@@ -110,7 +110,12 @@ Windows media flyout, VoiceOver/NVDA scripts in `scratchpad/06-a11y-audit.md`, W
 
 ## Text Chunking
 
-`src/shared/chunker.ts` is the source of truth (Intl.Segmenter sentences → clause → word splits, ≤300 chars, short first segment for fast start). Segments are offsets into the ORIGINAL paragraph text so the page can highlight them; `speech.ts` cleans text per segment AFTER chunking. Pauses are baked into each buffer as trailing silence (clause 100ms, sentence 180ms, paragraph 450ms, heading 700ms).
+`src/shared/chunker.ts` is the source of truth (v0.4). Kokoro resets intonation at every segment boundary, so the goal is one whole sentence per segment.
+- Sentences: Intl.Segmenter, then our own pass, because ICU never breaks before a lowercase word (all-lowercase X posts became one giant "sentence"). Abbreviation list from `sbd` (MIT).
+- One sentence per segment up to 420 chars; neighbours packed only while ≤140 chars. Over-long sentences split at the best-scored break (`; : —` > `,` > before clause words > space, balance penalty, no <25-char orphans, never inside a number/currency/unit). Short first segment (≤110) for fast start; `rampSplit` relies on `{fast:true}`.
+- Pauses by ending: `?`/`!` 220ms, `.` 180, `: ; —` 160, `,` 100, forced 40, paragraph 450, heading 700.
+- Engine guard (`engine.worker.ts`): wraps kokoro-js's tokenizer; over 500 tokens → split near the middle (`shared/split.ts`) and join audio, never truncate.
+Segments are offsets into the ORIGINAL paragraph text so the page can highlight them; `speech.ts` cleans text per segment AFTER chunking and calls `normalize.ts` (rule-based verbalizer: currency+magnitudes incl. attributive "dollar valuation", %, ranges, ordinals, fractions, units, dates/times, contextual Roman numerals, initialisms kokoro mangles, versions, @/#, X "1/" numbering; ported from misaki, Apache-2.0). Its output must stay stable under kokoro-js's own normalizer (tests check). No LLM: considered and rejected (download size, seconds-to-minutes before first audio, rewrites words and breaks highlight offsets).
 
 ## Architecture Decisions Made (and why)
 

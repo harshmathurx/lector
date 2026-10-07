@@ -4,15 +4,25 @@
 // message instead of a dead worker.
 
 import type { Dtype, LoadOptions, WorkerRequest, WorkerResponse } from './engine';
+import { splitNearMiddle } from '../shared/split';
 import { chooseTier, chooseWasm } from './tier';
 import type { Device, Hardware, Tier } from './tier';
 
 interface KokoroLike {
+  tokenizer: (phonemes: string, o?: { truncation?: boolean }) => { input_ids: { dims: number[] } };
   generate(
     text: string,
     opts: { voice: string; speed: number }
   ): Promise<{ audio: Float32Array; sampling_rate: number }>;
 }
+
+// The model's context is 510 tokens (kokoro-js silently truncates beyond that);
+// leave a little margin and split instead.
+const MAX_TOKENS = 500;
+const SPLIT_GAP_MS = 60;
+const SAMPLE_RATE = 24000;
+
+class TooLong extends Error {}
 
 const MODEL_ID = 'onnx-community/Kokoro-82M-v1.0-ONNX';
 const scope = self as unknown as {
@@ -100,9 +110,30 @@ async function loadModel(tier: Tier): Promise<void> {
     device: tier.device,
     progress_callback,
   })) as unknown as KokoroLike;
+  guardLength(kokoro);
   device = tier.device;
   dtype = tier.dtype;
   threads = tier.threads;
+}
+
+/**
+ * kokoro-js phonemizes internally and tokenizes with truncation, so an
+ * over-long sentence would lose its ending. Its phonemize step isn't exported,
+ * so wrap the tokenizer (which sees the phonemes) and bail out before
+ * inference when the untruncated length is over budget.
+ */
+function guardLength(k: KokoroLike): void {
+  const inner = k.tokenizer;
+  const guarded = (phonemes: string, o?: { truncation?: boolean }) => {
+    // transformers.js tokenizers are callable objects without Function.prototype.call.
+    const full = inner(phonemes, { truncation: false });
+    const n = full.input_ids.dims.at(-1) ?? 0;
+    if (n > MAX_TOKENS) throw new TooLong(String(n));
+    // Within budget, truncation is a no-op: the untruncated result is identical.
+    return full;
+  };
+  Object.assign(guarded, inner);
+  k.tokenizer = guarded as KokoroLike['tokenizer'];
 }
 
 async function load(): Promise<void> {
@@ -120,17 +151,39 @@ async function load(): Promise<void> {
   await loadModel(resolve('wasm'));
 }
 
-async function generate(text: string, voice: string, speed: number) {
+type Audio = { audio: Float32Array; sampling_rate: number };
+
+/** One model call; text over the token budget is split near the middle and the audio joined. */
+async function speak(text: string, voice: string, speed: number): Promise<Audio> {
+  try {
+    return await kokoro!.generate(text, { voice, speed });
+  } catch (e) {
+    if (!(e instanceof TooLong)) throw e;
+    const halves = splitNearMiddle(text);
+    if (!halves) throw new Error(`Segment too long to speak (${e.message} tokens)`);
+    console.warn(`[Lector] segment over token budget (${e.message} > ${MAX_TOKENS}), splitting`, text.length);
+    const a = await speak(halves[0], voice, speed);
+    const b = await speak(halves[1], voice, speed);
+    const rate = a.sampling_rate || SAMPLE_RATE;
+    const gap = Math.round((rate * SPLIT_GAP_MS) / 1000);
+    const audio = new Float32Array(a.audio.length + gap + b.audio.length);
+    audio.set(a.audio, 0);
+    audio.set(b.audio, a.audio.length + gap);
+    return { audio, sampling_rate: rate };
+  }
+}
+
+async function generate(text: string, voice: string, speed: number): Promise<Audio> {
   if (!kokoro) throw new Error('Engine not loaded');
   try {
-    return await kokoro.generate(text, { voice, speed });
+    return await speak(text, voice, speed);
   } catch (e) {
     // WebGPU can fail at inference time (driver issues). Drop to WASM once.
     if (device !== 'webgpu') throw e;
     console.warn('[Lector] WebGPU inference failed, reloading on WASM:', e);
     kokoro = null;
     await loadModel(resolve('wasm'));
-    return kokoro!.generate(text, { voice, speed });
+    return speak(text, voice, speed);
   }
 }
 

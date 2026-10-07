@@ -139,7 +139,11 @@ function rangeFor(map: TextMap, start: number, end: number): Range | null {
 
 // ─── Extraction ─────────────────────────────────────────────────────────────
 
-const BLOCK_SEL = 'p,li,h1,h2,h3,h4,h5,h6,blockquote,pre,dd,dt,figcaption';
+// `[data-block]` / `.public-DraftStyleDefault-block` are Draft.js blocks (X Articles, many rich-text
+// editors): every block is a <div>, so without them a wrapper that is a "leaf" by tag (e.g. a
+// <blockquote> or <li> holding several blocks) would be read as one merged paragraph.
+const BLOCK_SEL =
+  'p,li,h1,h2,h3,h4,h5,h6,blockquote,pre,dd,dt,figcaption,[data-block="true"],.public-DraftStyleDefault-block';
 
 /**
  * Where a paragraph lives on the page. `el` is its live block element when we
@@ -187,13 +191,18 @@ function collect(elements: Iterable<Element>, liveFor: (el: Element) => Element 
     // Readability invents blocks (e.g. <br><br> becomes <p>), which have no
     // live-DOM twin. Still read them; they just can't be highlighted.
     const live = liveFor(el);
-    if (live && seen.has(live)) continue;
-    const text = buildTextMap(live ?? el).text;
-    const kind = kindOf(el.tagName.toUpperCase());
-    if (text.length < minLength(kind)) continue;
-    if (live) seen.add(live);
-    paragraphs.push({ text, kind });
-    outBlocks.push(makeSource(text, live));
+    // A leaf in Readability's copy can map to a live wrapper of several blocks
+    // (it strips Draft.js markers): read the live leaves instead of one merged text.
+    const targets = live && !isLeafBlock(live) ? Array.from(live.querySelectorAll(BLOCK_SEL)).filter(isLeafBlock) : [live];
+    for (const t of targets) {
+      if (t && seen.has(t)) continue;
+      const text = buildTextMap(t ?? el).text;
+      const kind = kindOf((t ?? el).tagName.toUpperCase());
+      if (text.length < minLength(kind)) continue;
+      if (t) seen.add(t);
+      paragraphs.push({ text, kind });
+      outBlocks.push(makeSource(text, t));
+    }
   }
   return { paragraphs, blocks: outBlocks };
 }

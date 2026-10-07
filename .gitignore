@@ -7,3 +7,4 @@ tmp/
 .env*
 scratchpad/
 release/
+.claude/worktrees/
