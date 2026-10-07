@@ -240,8 +240,8 @@ describe('review fixes', () => {
   test('NNs is a decade only in decade context; else seconds or untouched', () => {
     expect(normalize('Set a 30s timeout.')).toBe('Set a thirty-second timeout.');
     expect(normalize('it ended 30s ago')).toBe('it ended thirty seconds ago');
-    expect(normalize('a 20s delay')).toBe('a twenty seconds delay');
-    expect(normalize('a 60s cooldown')).toBe('a sixty seconds cooldown');
+    expect(normalize('a 20s delay')).toBe('a twenty-second delay');
+    expect(normalize('a 60s cooldown')).toBe('a sixty-second cooldown');
     expect(normalize("the '80s")).toBe('the eighties');
     expect(normalize('in the 90s')).toBe('in the nineties');
     expect(normalize('in her 30s')).toBe('in her thirties');
