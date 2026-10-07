@@ -1,6 +1,8 @@
 // Turns display text into text a TTS model reads well. Applied per segment,
 // AFTER chunking, so highlight offsets always refer to the original text.
 
+import { normalize } from './normalize';
+
 const EMOJI_RE = /[\p{Extended_Pictographic}‍️]/gu;
 
 export function prepareForSpeech(input: string): string {
@@ -19,12 +21,17 @@ export function prepareForSpeech(input: string): string {
   // Emoji
   t = t.replace(EMOJI_RE, '');
 
+  // Numbers, money, units, dates, symbols, abbreviations -> words (before the
+  // punctuation cleanup below, which would mangle "/", "#", "~" and dashes)
+  t = normalize(t);
+
   // Punctuation the model handles poorly
   t = t.replace(/[“”«»]/g, '"').replace(/[‘’]/g, "'");
   t = t.replace(/\s*[—–]\s*/g, ', ');
   t = t.replace(/\s*\.{3,}\s*/g, '… ');
   t = t.replace(/&/g, ' and ');
-  t = t.replace(/\s*\/\s*/g, ' / ');
+  // Leftover slashes (dates, fractions, and/or are handled by normalize): "TCP/IP" -> "TCP IP"
+  t = t.replace(/\s*\/\s*/g, ' ');
   t = t.replace(/[*_#`~^|<>{}\\]/g, ' ');
 
   // Collapse whitespace

@@ -12,8 +12,9 @@
     "package": "rm -rf dist && bun run build && mkdir -p release && cd dist && zip -qr -X ../release/lector-$(node -p \"require('./manifest.json').version\").zip . -x '.DS_Store' '*/.DS_Store'"
   },
   "dependencies": {
-    "kokoro-js": "^1.2.1",
     "@mozilla/readability": "^0.6.0",
+    "kokoro-js": "^1.2.1",
+    "number-to-words": "^1.2.4",
     "onnxruntime-web": "1.22.0-dev.20250409-89f8206ba4"
   },
   "devDependencies": {
