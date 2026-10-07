@@ -6,6 +6,7 @@ import {
   PAUSE_PARAGRAPH_MS,
 } from './chunker';
 import { prepareForSpeech } from './speech';
+import { splitNearMiddle } from './split';
 import { cleanTitle } from './title';
 
 const LONG =
@@ -100,4 +101,19 @@ describe('cleanTitle', () => {
     expect(cleanTitle('  Plain title ')).toBe('Plain title');
     expect(cleanTitle(undefined)).toBe('');
   });
+});
+
+describe('splitNearMiddle', () => {
+  test('prefers a central semicolon over a nearer comma', () => {
+    const t = 'aaaa aaaa aaaa, aaaa aaaa aaaa aaaa; bbbb bbbb bbbb bbbb bbbb';
+    const [a, b] = splitNearMiddle(t)!;
+    expect(a.endsWith(';')).toBe(true);
+    expect(b.startsWith('bbbb')).toBe(true);
+  });
+  test('falls back to a space, then a hard cut', () => {
+    expect(splitNearMiddle('one two three four five six')![0]).toBe('one two three');
+    const [a, b] = splitNearMiddle('x'.repeat(40))!;
+    expect(a.length + b.length).toBe(40);
+  });
+  test('nothing to split', () => expect(splitNearMiddle('')).toBeNull());
 });
