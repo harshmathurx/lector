@@ -25,6 +25,18 @@ bun test
 2. If you touched playback, extraction or messaging, run `scripts/e2e.mjs` (header explains setup) or describe how you tested by hand.
 3. Note what you could not verify. We would rather know.
 
+## Releasing
+
+1. Bump `version` in `static/manifest.json` (and `package.json`).
+2. `bun run package` builds `release/lector-<version>.zip` (git-ignored).
+3. Tag and publish a GitHub release with the zip attached twice: as `lector-<version>.zip` and as `lector.zip` (the README's download link points at `releases/latest/download/lector.zip`).
+   ```bash
+   V=0.3.0; cp release/lector-$V.zip release/lector.zip
+   git tag v$V && git push origin v$V
+   gh release create v$V release/lector-$V.zip release/lector.zip --title "Lector $V" --notes-file <notes>
+   ```
+4. Upload the same zip in the Chrome Web Store dashboard. Listing copy, permission justifications and images live in `docs/store/`.
+
 ## Reporting bugs
 
 Please include the page URL (or a minimal HTML example), your Chrome version, whether you are on WebGPU or CPU (Settings in the popup shows this), and any errors from `chrome://extensions` → Lector → *service worker* / *offscreen.html* consoles.

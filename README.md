@@ -2,6 +2,8 @@
 
 **A voice you'd want to listen to.**
 
+![Lector reading an article, with the sentence being read highlighted on the page](docs/store/1-listen.png)
+
 Listen to any web page with natural AI voices, entirely on your device.
 
 Install, click, listen. **English only for now** (American and British voices). No account, no server, and nothing you read ever leaves your browser. Lector runs the [Kokoro 82M](https://huggingface.co/hexgrad/Kokoro-82M) speech model locally with WebGPU (or WASM on machines without a GPU).
@@ -10,27 +12,36 @@ Inspiration: [Voicebox](https://github.com/jamiepine/voicebox) by Jamie Pine. Le
 
 ## Features
 
-- **Starts fast.** Audio begins after the first sentence is ready, while the rest generates ahead of you.
-- **Follows along on the page.** The sentence being read is highlighted and scrolled into view (and it stays out of your way if you scroll yourself).
-- **Read from anywhere.** Select text and right-click → *Read aloud from here*, or Alt+click any paragraph while listening.
-- **Full control.** Seek bar with time left, previous/next paragraph, 0.75×–2× speed without pitch change, 28 English voices (US and UK) with search and favorites.
-- **Resilient.** If Chrome shuts down the audio engine, your place, voice and speed are restored when you press play.
-- **Private by design.** Uses `activeTab`, so it only touches a page when you ask it to. The only network access is the one-time model download from Hugging Face.
+- **Natural voices.** 28 American and British English voices with instant previews and favourites.
+- **Follow along, word by word.** The sentence being read is highlighted on the page and the spoken words are underlined as they're read, so you never lose your place. Pause and keep reading yourself any time. Turn it off with **Show on page**.
+- **Start anywhere.** Select text → right-click → **Listen from here**, press `Alt+Shift+H`, or Alt+click a paragraph while listening.
+- **Full control.** Seek bar with time left, previous/next paragraph, 0.75×–2× speed without pitch change, media keys and your computer's Now Playing controls.
+- **Light on your computer.** Uses your graphics chip when it can, multi-threaded CPU otherwise, and frees memory when you stop. Choose **Voice quality** in Settings if you want a smaller download.
+- **Accessible.** Works fully with a keyboard and screen readers, supports high-contrast mode and reduced motion, follows your light or dark theme.
+- **Private by design.** Uses `activeTab`, so it only touches a page when you ask it to. The only network access is the one-time model download from Hugging Face. See [PRIVACY.md](PRIVACY.md).
 
 ## Install
 
-Chrome Web Store listing: coming soon. For now, from source:
+**Chrome Web Store:** Lector has been submitted and is waiting for Google's review. The store link will appear here once it's approved.
+
+**Until then, install the release build:**
+
+1. Download **[lector.zip](https://github.com/harshmathurx/lector/releases/latest/download/lector.zip)** from the [latest release](https://github.com/harshmathurx/lector/releases/latest).
+2. Unzip it.
+3. Open `chrome://extensions`, turn on **Developer mode** (top right), click **Load unpacked**, and choose the unzipped folder.
+
+Chrome may remind you that a developer-mode extension is installed; that's expected for builds from outside the store. When the store version is live, remove this one and install Lector from the store to get automatic updates.
+
+The first time you listen, the voice model downloads once (about 90–330 MB depending on your computer) and is cached by the browser. After that, Lector works offline.
+
+**From source:**
 
 ```bash
 git clone https://github.com/harshmathurx/lector.git
 cd lector
 bun install
-bun run build
+bun run build   # then Load unpacked → dist/
 ```
-
-Then in Chrome: `chrome://extensions` → enable **Developer mode** → **Load unpacked** → choose the `dist/` folder.
-
-The first time you listen, the voice model downloads once (roughly 90 MB on CPU, larger on GPU) and is cached by the browser. After that, Lector works offline.
 
 ## Using it
 
@@ -38,13 +49,14 @@ The first time you listen, the voice model downloads once (roughly 90 MB on CPU,
 |---------|-------------|
 | Click the toolbar icon → **Listen to this page** | Read the whole article |
 | `Alt+Shift+R` | Start, or play/pause, from any tab |
-| `Alt+Shift+→` / `Alt+Shift+←` | Next / previous paragraph |
-| Select text → right-click → **Read aloud from here** | Start from that spot |
-| Select text → right-click → **Read only the selection aloud** | Read just the selection |
+| `Alt+Shift+H` | Listen from your selection, cursor or the focused paragraph |
+| `Alt+Shift+.` / `Alt+Shift+,` | Next / previous paragraph |
+| Select text → right-click → **Listen from here** | Start from that spot |
+| Select text → right-click → **Listen to selection** | Read just the selection |
 | `Alt+click` a paragraph while listening | Jump there |
-| Hardware media keys | Play/pause, next/previous |
+| Media keys / Now Playing | Play/pause, previous/next paragraph, skip 15s |
 
-Shortcuts can be changed at `chrome://extensions/shortcuts`.
+On a Mac, Alt is the Option key. Shortcuts can be changed at `chrome://extensions/shortcuts`.
 
 **Language support:** English only. Lector reads English pages with 28 American and British voices. Other languages are not supported yet and will not read well.
 
@@ -66,10 +78,11 @@ bun install
 bun run build         # build to dist/
 bun run watch         # rebuild on change
 bun run typecheck     # tsc --noEmit
-bun test              # unit tests (chunker, speech cleanup)
+bun test              # unit tests
+bun run package       # build the store/release zip into release/
 ```
 
-`scripts/e2e.mjs` is a real-browser end-to-end test (loads the built extension in Chromium with the real model); its header explains the setup. See [CONTRIBUTING.md](CONTRIBUTING.md).
+`scripts/e2e.mjs` is a real-browser end-to-end test (loads the built extension in Chromium with the real model) and `scripts/bench.mjs` measures start time, speed and memory; their headers explain the setup. See [CONTRIBUTING.md](CONTRIBUTING.md).
 
 ## Credits and licenses
 

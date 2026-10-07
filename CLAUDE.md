@@ -4,7 +4,7 @@
 
 A Chrome extension that reads any web article aloud with natural AI voices. Built for regular people — not developers, not AI enthusiasts. The person who has 47 tabs of articles they want to read but can't focus long enough. The person with ADHD who absorbs better by listening. The person who wants to hear a Substack post while cooking.
 
-**Name: Lector** (locked 2026-10-06; repo dir is still `voicebox-extension`, Voicebox is credited as inspiration only).
+**Name: Lector** (locked 2026-10-06; repo: github.com/harshmathurx/lector, local dir `harsh-builds/lector`; Voicebox is credited as inspiration only).
 
 **Language support: English only (28 US/UK voices).** State this wherever the product is described. Multilingual is deferred (last on the roadmap).
 
@@ -103,7 +103,7 @@ Windows media flyout, VoiceOver/NVDA scripts in `scratchpad/06-a11y-audit.md`, W
 - Speed change regenerates (cached after first time). Could pre-generate neighbors.
 - Non-English pages/voices: unsupported (see Model section). Spanish/French/etc. pages read with an English voice sound wrong; consider a clear notice on non-`en` pages.
 - No per-site extraction tuning (some SPAs/Substack variants may need fallbacks).
-- Chrome Web Store assets/listing, onboarding page.
+- Chrome Web Store: v0.3.0 submitted 2026-10-07, waiting for review. Listing kit in `docs/store/`; release zips on GitHub Releases (see CONTRIBUTING → Releasing).
 
 ## Text Chunking
 
@@ -126,7 +126,7 @@ Windows media flyout, VoiceOver/NVDA scripts in `scratchpad/06-a11y-audit.md`, W
 ## File Structure
 
 ```
-voicebox-extension/   (product: Lector)
+lector/
 ├── src/
 │   ├── popup/popup.ts          # Popup UI (polls background for state)
 │   ├── content/content.ts      # Extraction + highlight + Alt+click (injected on demand)
