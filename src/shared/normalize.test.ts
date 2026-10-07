@@ -101,7 +101,7 @@ const CASES: Array<[string, string]> = [
   ['Oct 7', 'Oct 7'],
   ['5:30 pm', 'five thirty P M'],
   ['5pm', 'five P M'],
-  ['9:05 a.m.', 'nine oh five A M.'],
+  ['9:05 a.m.', 'nine oh five ay M.'],
   ['17:30', 'seventeen thirty'],
   ['09:05', 'oh nine oh five'],
   ['1:23:45', '1:23:45'],
@@ -218,5 +218,49 @@ describe('prepareForSpeech with normalize', () => {
   });
   test('thread numbering', () => {
     expect(prepareForSpeech('1/ stop waiting')).toBe("1. stop waiting.");
+  });
+});
+
+describe('review fixes', () => {
+  test('single letters after context words stay letters', () => {
+    for (const s of ['Plug in a USB Type C cable.', 'Medicare Part D', 'See Appendix C', 'Plan B', 'Section L', 'Phase M'])
+      expect(normalize(s)).toBe(s);
+    expect(normalize('World War I')).toBe('World War One');
+    expect(normalize('Part V')).toBe('Part five');
+    expect(normalize('Chapter X')).toBe('Chapter ten');
+    expect(normalize('Type II diabetes')).toBe('Type two diabetes');
+  });
+  test('percent ranges', () => {
+    expect(normalize('Growth of 10-20% this year.')).toBe('Growth of ten to twenty percent this year.');
+  });
+  test('a.m. is spelled so it is not read as the article', () => {
+    expect(normalize('at 9 am')).toBe('at nine ay M');
+    expect(normalize('9:05 a.m.')).toBe('nine oh five ay M.');
+  });
+  test('NNs is a decade only in decade context; else seconds or untouched', () => {
+    expect(normalize('Set a 30s timeout.')).toBe('Set a thirty seconds timeout.');
+    expect(normalize('a 20s delay')).toBe('a twenty seconds delay');
+    expect(normalize('a 60s cooldown')).toBe('a sixty seconds cooldown');
+    expect(normalize("the '80s")).toBe('the eighties');
+    expect(normalize('in the 90s')).toBe('in the nineties');
+    expect(normalize('in her 30s')).toBe('in her thirties');
+    expect(normalize('the mid-90s')).toBe('the mid-nineties');
+    expect(normalize('lasted 30s')).toBe('lasted 30s');
+  });
+  test('dash chains (phone numbers) are left alone', () => {
+    expect(normalize('Call 1-800-555-1234 now.')).toBe('Call 1-800-555-1234 now.');
+  });
+  test('ranges: "to" only when ascending or in range context', () => {
+    expect(normalize('pages 10-20')).toBe('pages 10 to 20');
+    expect(normalize('they won 3-2')).toBe('they won 3 2');
+    expect(normalize('between 5-3 and 9')).toBe('between 5 to 3 and 9');
+  });
+  test('lowercase m: million after from/per, meters for measuring words', () => {
+    expect(normalize('They raised 5m from investors.')).toBe('They raised five million from investors.');
+    expect(normalize('2m per year')).toBe('two million per year');
+    for (const w of ['tall', 'long', 'away', 'deep', 'wide', 'high', 'above', 'below', 'apart'])
+      expect(normalize('5m ' + w)).toBe('five meters ' + w);
+    expect(normalize('the 100m sprint')).toBe('the one hundred meters sprint');
+    expect(normalize('a 100m race')).toBe('a one hundred meters race');
   });
 });

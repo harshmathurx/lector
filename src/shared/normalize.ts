@@ -205,7 +205,12 @@ const DECADE: Record<string, string> = {
   '2': 'twenties', '3': 'thirties', '4': 'forties', '5': 'fifties', '6': 'sixties', '7': 'seventies',
   '8': 'eighties', '9': 'nineties',
 };
-const METER_CONTEXT = String.raw`(?=\s*(?:tall|long|high|wide|deep|away|above|below|apart|per|from)\b|\s*\/s\b)`;
+const CHAIN_AFTER = /^\s?[–—-]\s?\d/;
+const RANGE_WORD = /\b(?:from|between|pages?|pp|years?|ages?|aged|rows?|lines?|chapters?)\s*$/i;
+const SECONDS_AFTER =
+  /^\s+(?:timeout|delay|cooldown|wait|interval|ago|later|left|timer|window|sleep|pause|ttl|duration)\b/i;
+const DECADE_BEFORE = /(?:\b(?:the|early|mid|late|in (?:her|his|their|my|your|our))[\s-]+|-)$/i;
+const METER_CONTEXT = String.raw`(?=\s*(?:tall|long|high|wide|deep|away|above|below|apart|sprint|race|dash|hurdles)\b|\s*\/s\b)`;
 
 // ---------------------------------------------------------------- rules
 const RE = {
@@ -238,16 +243,17 @@ const RE = {
   signedMinus: /(^|[\s(])[-−](?=\d)/g,
   signedPlus: /(^|[\s(])\+(?=\d)/g,
   currency: CURRENCY_RE,
+  percentRange: new RegExp(`${LB}(${NUM})\\s?[–—-]\\s?(${NUM})\\s?%`, 'g'),
   percent: new RegExp(`${LB}(${NUM})\\s?%`, 'g'),
   strayPercent: /\s?%/g,
   period: /\b(YoY|QoQ|MoM|WoW|YTD)\b/g,
-  range: /(?<![\w.])(\d[\d,]*(?:\.\d+)?)\s?[–—-]\s?(?=\d)/g,
+  range: /(?<![\w.])(?<!\d\s?[–—-]\s?)(\d[\d,]*(?:\.\d+)?)\s?[–—-]\s?(?=(\d[\d,]*(?:\.\d+)?))/g,
   vulgarMixed: /(\d)\s?([½⅓⅔¼¾⅛⅜⅝⅞])/g,
   vulgar: /[½⅓⅔¼¾⅛⅜⅝⅞]/g,
   fraction: /(?<![\w./])(\d{1,3})\/(\d{1,3})(?![\w/])/g,
   mult: new RegExp(`${LB}(${NUM})[x×](?![A-Za-z0-9])`, 'g'),
   ordinal: /(?<![\w.])(\d{1,15})(?:st|nd|rd|th)\b/g,
-  decade: /(?<![\w.])['’]?([2-9])0s\b/g,
+  decade: /(?<![\w.])(['’]?)([2-9])0s\b/g,
   meters: new RegExp(`${LB}(${NUM})m(?![A-Za-z0-9])${METER_CONTEXT}`, 'g'),
   magnitude: new RegExp(
     `${LB}(?!401[kK]\\b)(${NUM})(k|K|mn|MM|M|bn|B|tn|T|m)(?![A-Za-z0-9])(?!\\s+(?:video|resolution|display|monitor|screen|TV|UHD|HDR|run|race|footage))`,
@@ -287,7 +293,7 @@ const YEAR_OR_NULL = (y: string) => (y.length === 4 ? y : (+y <= 69 ? '20' : '19
 function clock(h: string, mm: string, mer?: string): string {
   const hn = +h;
   const hw = h[0] === '0' && hn > 0 ? 'oh ' + DIGITS[hn] : cardinal(hn);
-  if (mer) return [hw, minutesWords(mm), mer.toUpperCase() + ' M'].filter(Boolean).join(' ');
+  if (mer) return [hw, minutesWords(mm), (mer.toUpperCase() === 'A' ? 'ay' : 'P') + ' M'].filter(Boolean).join(' ');
   return mm === '00' ? hw + ' hundred' : [hw, minutesWords(mm)].join(' ');
 }
 
@@ -335,10 +341,18 @@ export function normalize(input: string): string {
     t = t.replace(RE.currency, currencyReplace);
 
     // Percent and period shorthands
+    t = t.replace(RE.percentRange, (_m, a, b) => numWords(a) + ' to ' + numWords(b) + ' percent');
     t = t.replace(RE.percent, (_m, n) => numWords(n) + ' percent').replace(RE.strayPercent, ' percent');
 
     // Ranges ("10-20", "2019–2024"): digits stay, hyphen becomes "to"
-    t = t.replace(RE.range, '$1 to ');
+    // Chains of 3+ dash-joined numbers (phone numbers, codes) are left alone.
+    // Descending pairs ("won 3-2") are scores, not ranges: the dash becomes a
+    // space, unless a range word precedes ("from 5-3", "between 5-3").
+    t = t.replace(RE.range, (m, a, b, off: number, str: string) => {
+      if (CHAIN_AFTER.test(str.slice(off + m.length + b.length))) return m;
+      if (parseFloat(b.replace(/,/g, '')) > parseFloat(a.replace(/,/g, ''))) return a + ' to ';
+      return RANGE_WORD.test(str.slice(Math.max(0, off - 20), off)) ? a + ' to ' : a + ' ';
+    });
 
     // Fractions and multipliers
     t = t.replace(RE.vulgarMixed, (_m, d, v) => d + (v === '½' ? ' and a half' : ' and ' + VULGAR[v]));
@@ -358,7 +372,11 @@ export function normalize(input: string): string {
 
     // Ordinals and decades
     t = t.replace(RE.ordinal, (_m, n) => ordinal(parseInt(n, 10)));
-    t = t.replace(RE.decade, (_m, d) => DECADE[d]);
+    t = t.replace(RE.decade, (m, apos: string, d: string, off: number, str: string) => {
+      if (apos) return DECADE[d];
+      if (SECONDS_AFTER.test(str.slice(off + m.length))) return numWords(d + '0') + ' seconds';
+      return DECADE_BEFORE.test(str.slice(Math.max(0, off - 20), off)) ? DECADE[d] : m;
+    });
 
     // Magnitudes, then units. Lowercase "m" is metres only before a measuring
     // word ("5m tall", "3m long", "2m/s"); otherwise it reads as million.
@@ -386,6 +404,8 @@ export function normalize(input: string): string {
     t = t.replace(RE.wwRoman, (_m, r) => 'World War ' + (r === 'I' ? 'One' : 'Two'));
     t = t.replace(RE.romanCtx, (m, ctx, r) => {
     const v = romanToInt(r);
+    // a lone C/D/L/M is a letter ("Type C", "Part D", "Plan B"), not a numeral
+    if (r.length === 1 && r !== 'I' && r !== 'V' && r !== 'X') return m;
     return v ? ctx + ' ' + (ctx === 'World War' ? capitalize(cardinal(v)) : cardinal(v)) : m;
     });
     t = t.replace(RE.romanKing, (m, name, r) => {
