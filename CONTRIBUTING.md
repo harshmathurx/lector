@@ -25,6 +25,10 @@ bun test
 2. If you touched playback, extraction or messaging, run `scripts/e2e.mjs` (header explains setup) or describe how you tested by hand.
 3. Note what you could not verify. We would rather know.
 
+## Pull requests
+
+`main` is protected: changes land through pull requests that pass CI and are approved by the maintainer (see `.github/CODEOWNERS`). Release tags (`v*`) can only be created by the maintainer.
+
 ## Releasing
 
 1. Bump `version` in `static/manifest.json` (and `package.json`).
@@ -38,6 +42,9 @@ bun test
 4. Upload the same zip in the Chrome Web Store dashboard. Listing copy, permission justifications and images live in `docs/store/`.
 
 ## Reporting bugs
+
+The easiest way: Lector popup → Settings → **Report a problem** fills in your versions for you. Security issues go through [SECURITY.md](SECURITY.md), never a public issue.
+
 
 Please include the page URL (or a minimal HTML example), your Chrome version, whether you are on WebGPU or CPU (Settings in the popup shows this), and any errors from `chrome://extensions` → Lector → *service worker* / *offscreen.html* consoles.
 
