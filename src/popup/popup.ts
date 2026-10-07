@@ -3,6 +3,7 @@
 
 import type { BackgroundRequest, Command, PlayerState, Quality } from '../shared/protocol';
 import { IDLE_STATE, QUALITIES, SPEEDS } from '../shared/protocol';
+import { bugReportUrl, describeBrowser } from '../shared/report';
 import { cleanTitle } from '../shared/title';
 import { DEFAULT_VOICE, findVoice, VOICES, type Voice } from '../shared/voices';
 
@@ -1034,6 +1035,21 @@ async function init(): Promise<void> {
     $('cache-note').textContent = res?.cleared
       ? `Cleared ${res.cleared} saved clips.`
       : 'Nothing to clear.';
+  });
+
+  $('btn-report').addEventListener('click', () => {
+    const nav = navigator as Navigator & { userAgentData?: { platform?: string } };
+    const url = bugReportUrl({
+      version: chrome.runtime.getManifest().version,
+      browser: describeBrowser(navigator.userAgent, nav.userAgentData?.platform),
+      device: state.device,
+      threads: state.threads,
+      quality,
+      voice: state.voice || selectedVoice,
+      speed: state.speed || selectedSpeed,
+      error: state.error,
+    });
+    void chrome.tabs.create({ url });
   });
 
   $('btn-shortcuts').addEventListener('click', () => {
