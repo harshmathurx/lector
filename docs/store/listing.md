@@ -41,7 +41,7 @@ Notes:
 Lector is free and open source: https://github.com/harshmathurx/lector
 
 **Images**
-- Icon 128×128: `static/icons/icon-light-128.png`
+- Store icon 128×128: `docs/store/store-icon-128.png` (96px icon + 16px transparent padding, per Google guidelines)
 - Screenshots 1280×800 (in order): `1-listen.png`, `2-follow.png`, `3-voices.png`, `4-private.png`
 - Small promo tile 440×280: `promo-small-440x280.png`
 - Marquee 1400×560 (optional): `promo-marquee-1400x560.png`
