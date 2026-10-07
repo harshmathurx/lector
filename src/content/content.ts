@@ -88,11 +88,10 @@ function buildTextMap(root: Node, wholeDoc = false): TextMap {
         if (cs.display === 'none' || cs.visibility === 'hidden' || cs.visibility === 'collapse') return;
       }
       const tag = el.tagName.toUpperCase();
-      // Block boundaries separate words in every mode: "<div>a</div><div>b</div>" is "a b", not "ab".
-      const brk = tag === 'BR' || BLOCKISH.has(tag);
+      const brk = tag === 'BR' || (wholeDoc && BLOCKISH.has(tag));
       if (brk) space();
       el.childNodes.forEach(walk);
-      if (brk) space();
+      if (wholeDoc && brk) space();
     } else if (node.nodeType === Node.TEXT_NODE) {
       const t = node as Text;
       const idx = nodes.push(t) - 1;
@@ -146,45 +145,6 @@ function rangeFor(map: TextMap, start: number, end: number): Range | null {
 const BLOCK_SEL =
   'p,li,h1,h2,h3,h4,h5,h6,blockquote,pre,dd,dt,figcaption,[data-block="true"],.public-DraftStyleDefault-block';
 
-/** Marker (never matched by \s) that stands for a visual paragraph break inside one block element. */
-const PARA_BREAK = '\u0001';
-
-/**
- * Text of a live block split at visual paragraph breaks that are not block
- * elements: <br><br> runs (paulgraham.com style). Readability splits these in
- * its clone, but the live element they map to still holds all of them.
- */
-function splitAtBreaks(el: Element): string[] {
-  const text = (e: Element) => buildTextMap(e).text;
-  if (!hasBrRun(el)) return [text(el)];
-  const copy = el.cloneNode(true) as Element;
-  const brs = Array.from(copy.querySelectorAll('br'));
-  for (const br of brs) {
-    if (!br.parentNode) continue;
-    // A run of <br>s separated only by whitespace is one break.
-    let next = br.nextSibling;
-    const drop: Node[] = [];
-    while (next && ((next.nodeType === Node.TEXT_NODE && !(next as Text).data.trim()) || (next as Element).tagName === 'BR')) {
-      drop.push(next);
-      next = next.nextSibling;
-    }
-    if (drop.some((n) => (n as Element).tagName === 'BR')) {
-      drop.forEach((n) => n.parentNode?.removeChild(n));
-      br.replaceWith(document.createTextNode(PARA_BREAK));
-    }
-  }
-  return text(copy).split(PARA_BREAK).map((t) => t.trim()).filter(Boolean);
-}
-
-function hasBrRun(el: Element): boolean {
-  for (const br of el.querySelectorAll('br')) {
-    let n = br.nextSibling;
-    while (n && n.nodeType === Node.TEXT_NODE && !(n as Text).data.trim()) n = n.nextSibling;
-    if (n && (n as Element).tagName === 'BR') return true;
-  }
-  return false;
-}
-
 /**
  * Where a paragraph lives on the page. `el` is its live block element when we
  * have one; synthesised paragraphs (Readability's invented <p>s, the title,
@@ -231,25 +191,18 @@ function collect(elements: Iterable<Element>, liveFor: (el: Element) => Element 
     // Readability invents blocks (e.g. <br><br> becomes <p>), which have no
     // live-DOM twin. Still read them; they just can't be highlighted.
     const live = liveFor(el);
-    if (live && seen.has(live)) continue;
-    const kind = kindOf(el.tagName.toUpperCase());
-    const pieces = live ? splitAtBreaks(live) : [buildTextMap(el).text];
-    if (live && pieces.length > 1) {
-      // One live element holds several visual paragraphs (<br><br>): read them
-      // separately; they have no element of their own, so they're found by text.
-      seen.add(live);
-      for (const t of pieces) {
-        if (t.length < minLength(kind)) continue;
-        paragraphs.push({ text: t, kind });
-        outBlocks.push(makeSource(t, null));
-      }
-      continue;
+    // A leaf in Readability's copy can map to a live wrapper of several blocks
+    // (it strips Draft.js markers): read the live leaves instead of one merged text.
+    const targets = live && !isLeafBlock(live) ? Array.from(live.querySelectorAll(BLOCK_SEL)).filter(isLeafBlock) : [live];
+    for (const t of targets) {
+      if (t && seen.has(t)) continue;
+      const text = buildTextMap(t ?? el).text;
+      const kind = kindOf((t ?? el).tagName.toUpperCase());
+      if (text.length < minLength(kind)) continue;
+      if (t) seen.add(t);
+      paragraphs.push({ text, kind });
+      outBlocks.push(makeSource(text, t));
     }
-    const text = pieces[0] ?? '';
-    if (text.length < minLength(kind)) continue;
-    if (live) seen.add(live);
-    paragraphs.push({ text, kind });
-    outBlocks.push(makeSource(text, live));
   }
   return { paragraphs, blocks: outBlocks };
 }
