@@ -1,5 +1,7 @@
 # Lector — Full Project Context for Claude Code
 
+> **Continuing work? Read `scratchpad/HANDOFF.md` first** (state, locked decisions, next brainstorm agenda).
+
 ## Product Vision
 
 A Chrome extension that reads any web article aloud with natural AI voices. Built for regular people — not developers, not AI enthusiasts. The person who has 47 tabs of articles they want to read but can't focus long enough. The person with ADHD who absorbs better by listening. The person who wants to hear a Substack post while cooking.
@@ -34,20 +36,21 @@ Background SW (background.ts)         Lifecycle + routing only. Extracts article
 │                                      doc (ping handshake, recreate once), relays timed highlight events to the tab (VB_HIGHLIGHT with durationMs/offsetMs, VB_HIGHLIGHT_PAUSE), processes engine events strictly in order, persists
 │                                      the session in chrome.storage.session so it can RECOVER if Chrome kills the
 │                                      offscreen doc (it does after 30s without audio). Context menu, shortcuts, badge,
-│                                      5-min idle alarm closes the offscreen doc.
+│                                      5-min idle alarm closes the offscreen doc (Chrome usually closes it ~30s after audio stops).
 Content script (content.ts)           Injected ON DEMAND (activeTab). Readability on a clone, but paragraph text comes from
 │                                      the LIVE DOM (temporary data-vb-i attrs map clone→live) so we keep a text↔DOM map.
 │                                      Highlights the spoken sentence via CSS Custom Highlight API (no DOM changes),
 │                                      smart auto-scroll (yields to user scrolling), Alt+click paragraph = read from here.
 Offscreen (offscreen.ts, engine.ts, engine.worker.ts, cache.ts)
-    offscreen.ts: session + player. Segments (≈sentences) → lookahead pump (4 ahead) → AudioBuffers with the pause baked
+    offscreen.ts: session + player. Segments (≈sentences) → adaptive lookahead pump (12–40s of audio by measured speed) → AudioBuffers with the pause baked
     in as trailing silence → one source at a time; pause/seek/skip are all segment based. Speed/voice change regenerates
     from the current segment. Tiny to evaluate: registers its listener first.
     engine.ts: thin client for engine.worker.ts. The worker owns the model (lazy `import()` of onnxruntime-web + kokoro-js,
     so a load failure = error state, not a dead doc), WebGPU→WASM fallback at load AND inference time, serial queue.
     Why a worker: on WASM, inference blocked the main thread (pause took 5-22s, voice change 15s). ORT's own proxy worker
     can't be used in a bundle; now commands answer in <15ms on both backends and offscreen.js is ~22KB.
-    cache.ts: IndexedDB, sha256(voice|speed|text) key, Float32Array values, 48h TTL, 500 entries.
+    tier.ts: picks backend/precision/threads per device (WebGPU fp32; WASM q4/q8 with up to 4 threads; Voice quality overrides).
+    cache.ts: IndexedDB, sha256(voice|speed|text) key, 16-bit PCM, 48h TTL, capped at 96MB by bytes.
 shared/: protocol.ts (types), chunker.ts (Intl.Segmenter sentence split → offsets into ORIGINAL text),
          speech.ts (display text → speakable text, applied per segment AFTER chunking), voices.ts.
 ```
