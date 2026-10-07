@@ -125,7 +125,8 @@ async function loadModel(tier: Tier): Promise<void> {
 function guardLength(k: KokoroLike): void {
   const inner = k.tokenizer;
   const guarded = (phonemes: string, o?: { truncation?: boolean }) => {
-    const full = inner.call(k, phonemes, { truncation: false });
+    // transformers.js tokenizers are callable objects without Function.prototype.call.
+    const full = inner(phonemes, { truncation: false });
     const n = full.input_ids.dims.at(-1) ?? 0;
     if (n > MAX_TOKENS) throw new TooLong(String(n));
     // Within budget, truncation is a no-op: the untruncated result is identical.
