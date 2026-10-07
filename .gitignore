@@ -6,3 +6,4 @@ tmp/
 *.tsbuildinfo
 .env*
 scratchpad/
+release/
