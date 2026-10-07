@@ -4,6 +4,13 @@ import { prepareForSpeech } from './speech';
 
 // [input, expected spoken text]
 const CASES: Array<[string, string]> = [
+  // attributive amounts, Indian "cr", "yr"
+  ['a $40B valuation', 'a forty billion dollar valuation'],
+  ['a $5 bill', 'a five dollar bill'],
+  ['it costs $5 each', 'it costs five dollars each'],
+  ['₹1,200 cr', 'one thousand two hundred crore rupees'],
+  ['up from last yr', 'up from last year'],
+  ['3 yrs ago', '3 years ago'],
   // currency + magnitude
   ['$2.5M', 'two point five million dollars'],
   ['$40B', 'forty billion dollars'],

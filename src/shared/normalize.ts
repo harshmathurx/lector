@@ -62,7 +62,7 @@ const MAG_WORD: Record<string, string> = {
   m: 'million', M: 'million', mn: 'million', MM: 'million', million: 'million',
   b: 'billion', B: 'billion', bn: 'billion', billion: 'billion',
   t: 'trillion', T: 'trillion', tn: 'trillion', trillion: 'trillion',
-  crore: 'crore', crores: 'crore', lakh: 'lakh', lakhs: 'lakh',
+  crore: 'crore', crores: 'crore', cr: 'crore', lakh: 'lakh', lakhs: 'lakh',
 };
 
 // ---------------------------------------------------------------- currency
@@ -75,20 +75,30 @@ const CUR: Record<string, [string, string, string, string]> = {
   Rs: ['rupee', 'rupees', 'paisa', 'paise'],
   '¥': ['yen', 'yen', 'sen', 'sen'],
 };
-const AMT = String.raw`(${NUM})(?:\s?(thousand|million|billion|trillion|crores?|lakhs?)\b|(k|K|mn|MM|bn|tn|[MBTmb])(?![A-Za-z0-9]))?`;
+const AMT = String.raw`(${NUM})(?:\s?(thousand|million|billion|trillion|crores?|cr|lakhs?)\b|(k|K|mn|MM|bn|tn|[MBTmb])(?![A-Za-z0-9]))?`;
 // amount [- amount]; the second amount may repeat the symbol
 const CURRENCY_RE = new RegExp(
-  String.raw`(?:\b(?:US|CA|AU|NZ|HK)(?=\$))?(\$|£|€|₹|¥|\bRs\.?)\s?${AMT}(?:\s?(?:[–—-]|to)\s?(?:[$£€₹¥]\s?)?${AMT})?`,
+  String.raw`(?:\b(?:US|CA|AU|NZ|HK)(?=\$))?(\$|£|€|₹|¥|\bRs\.?)\s?${AMT}(?:\s?(?:[–—-]|to)\s?(?:[$£€₹¥]\s?)?${AMT})?(?=\s([a-z]+)|)`,
   'g',
 );
-// Capture groups: symbol, then (num, word, abbr) for each of the two amounts.
+// Capture groups: symbol, then (num, word, abbr) for each of the two amounts,
+// then the following word (to tell "$5 bill" from "$5 each").
+
+/** Nouns an amount commonly modifies: "a forty billion dollar valuation", not "dollars valuation". */
+const ATTRIBUTIVE = new Set(
+  ('valuation deal company business fund round budget market industry question loan contract investment ' +
+    'acquisition bill check cheque note startup project program programme plan salary bonus house home car ' +
+    'purchase payment fine settlement lawsuit bet gift ticket prize grant raise order item product machine ' +
+    'phone laptop camera meal coffee subscription fee tax cut increase hike bailout package empire bond').split(' ')
+);
 
 const magOf = (word?: string, abbr?: string): string => MAG_WORD[word ?? abbr ?? ''] ?? '';
 
 function currencyReplace(...g: any[]): string {
-  const [, sym, n1, w1, a1, n2, w2, a2] = g as [string, string, string, string?, string?, string?, string?, string?];
+  const [, sym, n1, w1, a1, n2, w2, a2, next] = g as [string, string, string, string?, string?, string?, string?, string?, string?];
   const key = sym.startsWith('Rs') ? 'Rs' : sym;
-  const [unit, units, minor, minors] = CUR[key];
+  const [unit, plural, minor, minors] = CUR[key];
+  const units = next && ATTRIBUTIVE.has(next) ? unit : plural;
   const mag1 = magOf(w1, a1);
   if (n2 === undefined) {
     if (!mag1) {
@@ -206,6 +216,7 @@ const RE = {
   etc: /\betc\./g,
   vs: /\bvs\.?(?=\s)/gi,
   approx: /\bapprox\./gi,
+  yr: /\byr(s?)\b\.?/g,
   wo: /\bw\/o\b/gi,
   w: /\bw\/(?=[\s\w])/gi,
   andOr: /\band\/or\b/gi,
@@ -290,7 +301,7 @@ export function normalize(input: string): string {
   // Abbreviations
   t = t.replace(RE.eg, 'for example,').replace(RE.ie, 'that is,');
   t = t.replace(RE.etcEnd, 'et cetera.').replace(RE.etc, 'et cetera');
-  t = t.replace(RE.vs, 'versus').replace(RE.approx, 'approximately');
+  t = t.replace(RE.vs, 'versus').replace(RE.approx, 'approximately').replace(RE.yr, 'year$1');
   t = t.replace(RE.wo, 'without').replace(RE.w, 'with').replace(RE.andOr, 'and or');
   t = t.replace(RE.bc, 'because').replace(RE.na, 'not applicable');
   t = t.replace(RE.allDay, 'twenty four seven').replace(RE.no, 'number ');
