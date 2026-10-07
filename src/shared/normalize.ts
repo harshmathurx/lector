@@ -209,6 +209,8 @@ const CHAIN_AFTER = /^\s?[–—-]\s?\d/;
 const RANGE_WORD = /\b(?:from|between|pages?|pp|years?|ages?|aged|rows?|lines?|chapters?)\s*$/i;
 const SECONDS_AFTER =
   /^\s+(?:timeout|delay|cooldown|wait|interval|ago|later|left|timer|window|sleep|pause|ttl|duration)\b/i;
+/** Followed by a noun it modifies: "a thirty-second timeout", not "thirty seconds timeout". */
+const SECONDS_ATTRIB = /^\s+(?:timeout|delay|cooldown|wait|interval|timer|window|sleep|pause|ttl|duration)\b/i;
 const DECADE_BEFORE = /(?:\b(?:the|early|mid|late|in (?:her|his|their|my|your|our))[\s-]+|-)$/i;
 const METER_CONTEXT = String.raw`(?=\s*(?:tall|long|high|wide|deep|away|above|below|apart|sprint|race|dash|hurdles)\b|\s*\/s\b)`;
 
@@ -374,7 +376,9 @@ export function normalize(input: string): string {
     t = t.replace(RE.ordinal, (_m, n) => ordinal(parseInt(n, 10)));
     t = t.replace(RE.decade, (m, apos: string, d: string, off: number, str: string) => {
       if (apos) return DECADE[d];
-      if (SECONDS_AFTER.test(str.slice(off + m.length))) return numWords(d + '0') + ' seconds';
+      const rest = str.slice(off + m.length);
+      if (SECONDS_ATTRIB.test(rest)) return numWords(d + '0') + '-second';
+      if (SECONDS_AFTER.test(rest)) return numWords(d + '0') + ' seconds';
       return DECADE_BEFORE.test(str.slice(Math.max(0, off - 20), off)) ? DECADE[d] : m;
     });
 
