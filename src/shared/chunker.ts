@@ -95,6 +95,42 @@ const DOTTED_RE = /^(?:\p{L}\.)+\p{L}$/u; // U.S  p.m  e.g  ph.d
 const INITIAL_RE = /^\p{Lu}$/u; // J.  (but "I." is a word)
 const DIGITS_RE = /^\d+$/;
 
+const SENTENCE_STARTERS = new Set(
+  (
+    'the then it he she we they i you this that these those there here in on at but and so if when as after ' +
+    'before for with a an my our your his her its what how why who where also now still yet or not no yes some ' +
+    'many most all one each every while although however meanwhile since because once today let do does did is ' +
+    'are was were can will would should could please just to from by of'
+  ).split(' '),
+);
+const SINGLE_INITIAL_RE = /^\p{Lu}\.$/u;
+const CAP_WORD_RE = /^\p{Lu}[\p{L}'’-]+$/u;
+
+function wordBefore(text: string, i: number): string {
+  let e = i;
+  while (e > 0 && isSpace(text.charCodeAt(e - 1))) e--;
+  let b = e;
+  while (b > 0 && !isSpace(text.charCodeAt(b - 1))) b--;
+  return text.slice(b, e);
+}
+
+/**
+ * A single capital + "." is an initial ("John F. Kennedy", "J. R. R. Tolkien",
+ * "J. Smith"), not a sentence end ("Plan B. Then", "vitamin C. It"), when the
+ * next word is a capitalized name (not a common sentence starter) and either
+ * the previous word is capitalized or we are at the sentence start, or when
+ * the next token is itself an initial.
+ */
+function isInitial(text: string, tokStart: number, dot: number, sentStart: number, nextIdx: number): boolean {
+  const next = wordAt(text, nextIdx, text.length);
+  if (SINGLE_INITIAL_RE.test(next)) return true;
+  const name = next.replace(/[.,;:!?)"'”’\]]+$/, '');
+  if (!CAP_WORD_RE.test(name) || SENTENCE_STARTERS.has(name.toLowerCase())) return false;
+  if (tokStart <= sentStart) return true;
+  const prev = wordBefore(text, tokStart);
+  return CAP_WORD_RE.test(prev) || SINGLE_INITIAL_RE.test(prev);
+}
+
 /**
  * Is the '.' at `dot` the end of an abbreviation, initial or list marker
  * rather than the end of a sentence? `forMerge` skips the dotted forms
@@ -108,7 +144,7 @@ function isAbbrevDot(text: string, dot: number, sentStart: number, nextIdx: numb
   const tok = text.slice(s, dot);
   if (DIGITS_RE.test(tok)) return s <= sentStart; // "1." list marker at sentence start
   if (tok === 'I') return false;
-  if (INITIAL_RE.test(tok)) return true;
+  if (INITIAL_RE.test(tok)) return isInitial(text, s, dot, sentStart, nextIdx);
   if (DOTTED_RE.test(tok)) return !forMerge;
   const lower = tok.toLowerCase();
   if (ABBR.has(lower)) return true;
