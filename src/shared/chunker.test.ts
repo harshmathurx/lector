@@ -245,6 +245,18 @@ describe('pauses', () => {
   });
 });
 
+describe('single-capital initials vs sentence ends', () => {
+  test('"Plan B." and "vitamin C." end sentences', () => {
+    expect(sentences('We need a Plan B. Then we can go home.')).toEqual(['We need a Plan B.', 'Then we can go home.']);
+    expect(sentences('Take vitamin C. It helps a lot.')).toEqual(['Take vitamin C.', 'It helps a lot.']);
+  });
+  test('real initials still merge', () => {
+    expect(sentences('John F. Kennedy spoke. Then he left.')).toEqual(['John F. Kennedy spoke.', 'Then he left.']);
+    expect(sentences('J. R. R. Tolkien wrote it. Fans cheered.')).toEqual(['J. R. R. Tolkien wrote it.', 'Fans cheered.']);
+    expect(sentences('J. Smith arrived. Then he left.')).toEqual(['J. Smith arrived.', 'Then he left.']);
+  });
+});
+
 describe('performance', () => {
   test('chunking a 5,000-word article takes under 5ms', () => {
     const para = LONG + ' ' + LOWER + ' ' + WHILE;

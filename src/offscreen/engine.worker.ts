@@ -125,9 +125,11 @@ async function loadModel(tier: Tier): Promise<void> {
 function guardLength(k: KokoroLike): void {
   const inner = k.tokenizer;
   const guarded = (phonemes: string, o?: { truncation?: boolean }) => {
-    const n = inner.call(k, phonemes, { truncation: false }).input_ids.dims.at(-1) ?? 0;
+    const full = inner.call(k, phonemes, { truncation: false });
+    const n = full.input_ids.dims.at(-1) ?? 0;
     if (n > MAX_TOKENS) throw new TooLong(String(n));
-    return inner.call(k, phonemes, o);
+    // Within budget, truncation is a no-op: the untruncated result is identical.
+    return full;
   };
   Object.assign(guarded, inner);
   k.tokenizer = guarded as KokoroLike['tokenizer'];
