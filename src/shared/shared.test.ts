@@ -49,3 +49,27 @@ describe('splitNearMiddle', () => {
   });
   test('nothing to split', () => expect(splitNearMiddle('')).toBeNull());
 });
+
+import { chooseTitle, isJunkTitle } from './title';
+
+describe('chooseTitle', () => {
+  const xJunk = 'Incentivising on X: "https://t.co/zLW6XKmj8g" / X';
+  test('flags X-style titles as junk', () => {
+    expect(isJunkTitle(xJunk)).toBe(true);
+    expect(isJunkTitle('Name on X: "https://t.co/abc" / X')).toBe(true);
+    expect(isJunkTitle('Incentivising (@incentivising) on X')).toBe(true);
+    expect(isJunkTitle('https://example.com/a')).toBe(true);
+    expect(isJunkTitle('How to Do Great Work')).toBe(false);
+    expect(isJunkTitle('Why I like X')).toBe(false);
+  });
+  test('falls through junk og:title to the article h1', () => {
+    expect(chooseTitle({ og: 'Incentivising (@incentivising) on X', heading: 'Incentivising', readability: xJunk, doc: xJunk })).toBe('Incentivising');
+  });
+  test('prefers og:title, strips the site name', () => {
+    expect(chooseTitle({ og: 'Why we save articles | Longreads', heading: 'Other', doc: 'x' })).toBe('Why we save articles');
+  });
+  test('uses document title when nothing better exists, even if junk', () => {
+    expect(chooseTitle({ doc: xJunk })).toBe(xJunk);
+    expect(chooseTitle({})).toBe('');
+  });
+});
