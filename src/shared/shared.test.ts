@@ -1,7 +1,7 @@
 import { describe, expect, test } from 'bun:test';
 import { prepareForSpeech } from './speech';
 import { splitNearMiddle } from './split';
-import { cleanTitle } from './title';
+import { chooseTitle, cleanTitle, isJunkTitle } from './title';
 
 describe('prepareForSpeech', () => {
   test('strips citations, urls, emoji', () => {
@@ -50,7 +50,6 @@ describe('splitNearMiddle', () => {
   test('nothing to split', () => expect(splitNearMiddle('')).toBeNull());
 });
 
-import { chooseTitle, isJunkTitle } from './title';
 
 describe('chooseTitle', () => {
   const xJunk = 'Incentivising on X: "https://t.co/zLW6XKmj8g" / X';
