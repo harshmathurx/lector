@@ -443,35 +443,61 @@ function headingsBefore(root: Element): { h1: Element | null; extras: Element[] 
   return { h1, extras };
 }
 
-function liveWalk(root: Element): Extracted | null {
+/** Link-density skipping never applies to these: definition terms, headings, captions, table/definition-list cells. */
+function exemptFromLinkSkip(el: Element, isHeading: boolean): boolean {
+  return isHeading || /^(DT|FIGCAPTION|CAPTION|TH)$/.test(el.tagName.toUpperCase()) || !!el.closest('dl,table');
+}
+
+const headingLevel = (el: Element): number => {
+  const m = /^H([1-6])$/.exec(el.tagName.toUpperCase());
+  return m ? Number(m[1]) : Number(el.getAttribute('aria-level')) || 2;
+};
+
+function liveWalk(root: Element, core: Element = root): Extracted | null {
   const before = headingsBefore(root);
   const rawBlocked = makeBlocked(root, null);
   const h1 = Array.from(root.querySelectorAll('h1')).find((h) => !rawBlocked(h)) ?? before.h1;
   const inRoot = makeBlocked(root, h1);
   const out: Extracted = { paragraphs: [], blocks: [] };
   const seen = new Set<Element>();
-  let lastWasHeading = false; // the block just read is a heading (not the first one)
+  const levels: number[] = []; // per paragraph: heading level, 0 for body text
+  const skipsAt: number[] = []; // paragraphs.length at the moment each link-dense block was skipped
   const run = (el: Element, blocked: ((e: Element) => boolean) | null) => {
-    if (!isReadable(el) || blocked?.(el)) return;
+    const cell = el.tagName === 'TD' && !!el.closest('table')?.tHead; // cells of tables with a header row (spec/compat tables), not infobox layouts
+    if (!(cell ? !el.querySelector(WRAPPER_SEL) && !el.parentElement?.closest(BLOCK_SEL) : isReadable(el)) || blocked?.(el)) return;
+    // A root widened to reach the intro: read what comes before the original root, never what trails it (CTAs, footers).
+    if (core !== root && !core.contains(el) && core.compareDocumentPosition(el) & Node.DOCUMENT_POSITION_FOLLOWING) return;
     const tag = el.tagName.toUpperCase();
     const isHeading = /^H[1-6]$/.test(tag) || el.getAttribute('role') === 'heading';
     const text = buildTextMap(el).text;
     if (tag === 'PRE' && text.length > 200) return; // code, not prose
-    if (!isHeading && linkDense(el, text.length)) {
-      // "Keep reading" above a list of links we skipped: drop the orphaned heading too.
-      if (lastWasHeading && out.blocks[out.blocks.length - 1]?.el?.parentElement?.contains(el)) {
-        out.paragraphs.pop();
-        out.blocks.pop();
-      }
-      lastWasHeading = false;
+    if (!exemptFromLinkSkip(el, isHeading) && linkDense(el, text.length)) {
+      skipsAt.push(out.paragraphs.length);
       return;
     }
     const n = out.paragraphs.length;
-    addBlock(out, seen, el, el, /^(DIV|SECTION)$/.test(tag) ? 20 : minLength('text'));
-    lastWasHeading = isHeading && out.paragraphs.length > n && n > 0;
+    addBlock(out, seen, el, el, /^(DIV|SECTION|TD)$/.test(tag) ? 20 : minLength('text'));
+    for (let i = n; i < out.paragraphs.length; i++) levels.push(out.paragraphs[i].kind === 'heading' && (i > n || isHeading) ? headingLevel(el) : 0);
   };
   for (const el of before.extras) run(el, null); // already vetted by headingsBefore
-  for (const el of root.querySelectorAll(`${BLOCK_SEL},div,section`)) run(el, inRoot);
+  for (const el of root.querySelectorAll(`${BLOCK_SEL},div,section,td`)) run(el, inRoot);
+  // "Keep reading" above a list of links we skipped: a heading whose whole section (up to the next heading of the
+  // same or higher level) kept no body text, but had link-only blocks skipped, is an orphan.
+  const drop = new Set<number>();
+  for (let i = 1; i < levels.length; i++) {
+    if (!levels[i]) continue;
+    let end = i + 1;
+    let body = false;
+    while (end < levels.length && !(levels[end] && levels[end] <= levels[i])) {
+      if (!levels[end] && !drop.has(end)) body = true;
+      end++;
+    }
+    if (!body && skipsAt.some((k) => k > i && k <= end)) drop.add(i);
+  }
+  if (drop.size) {
+    out.paragraphs = out.paragraphs.filter((_, i) => !drop.has(i));
+    out.blocks = out.blocks.filter((_, i) => !drop.has(i));
+  }
   while (out.paragraphs.length > 1 && out.paragraphs[out.paragraphs.length - 1].kind === 'heading') {
     out.paragraphs.pop(); // a heading at the very end introduced something we did not read
     out.blocks.pop();
@@ -480,12 +506,31 @@ function liveWalk(root: Element): Extracted | null {
   return out.paragraphs.length ? out : null;
 }
 
+/**
+ * The article's intro can sit in a sibling section before the root Readability picked (MDN). If the page's
+ * title heading is outside the root, widen to the nearest ancestor holding it, unless that is much bigger.
+ */
+function widenToTitle(root: Element): Element {
+  // Only short pages: there the lede is a real share of the text; on long ones a lost standfirst is cheap and
+  // widening risks pulling in bylines, dates and ad slots.
+  if (root.querySelector('h1') || textSize(root) > 4000) return root;
+  const h1 = headingsBefore(root).h1;
+  if (!h1) return root;
+  const limit = textSize(root) * 1.6;
+  for (let a = root.parentElement; a && a !== document.body && a !== document.documentElement; a = a.parentElement) {
+    if (!a.contains(h1)) continue;
+    return textSize(a) <= limit ? a : root;
+  }
+  return root;
+}
+
 /** Readability finds the article; the live DOM under its root is what we read. Null = use Readability's output. */
 function readLive(classic: Extracted): Extracted | null {
   try {
     const root = findRoot(classic);
     if (!root) return debug('extract: no usable live root'), null;
-    const live = liveWalk(root);
+    const wide = widenToTitle(root);
+    const live = liveWalk(wide, root);
     if (!live) return debug('extract: live walk found nothing'), null;
     const mine = charsOf(live);
     const theirs = charsOf(classic);
