@@ -359,6 +359,11 @@ function headerBlocked(n: Element, h1: Element | null, insideRoot: boolean): boo
   return !!h1 && !n.contains(h1);
 }
 const HEADING_SEL = 'h1,h2,h3,h4,h5,h6,[role="heading"]';
+/** Labels of in-article recirculation boxes. */
+const PROMO_LABEL =
+  /^(recommended( reading| for you)?|related( (articles|stories|posts|reading|content))?|read (more|next|also)|more (from|on|stories|to read)\b.*|you (may|might) (also )?like|popular( now)?|trending( now)?|most (read|popular)|keep reading|up next)\s*:?$/i;
+/** "Read: <headline>" style inline promos. */
+const PROMO_INLINE = /^(read( more| next| also)?|related|see also|also read|watch)\s*:\s+\S/i;
 /** Elements whose presence means a div is a wrapper, not a text block. */
 const WRAPPER_SEL = `${BLOCK_SEL},div,section,article,ul,ol,table,aside,nav,header,footer,figure,form,main,details`;
 
@@ -381,15 +386,43 @@ function zoneBlocked(n: Element, h1: Element | null, insideRoot: boolean): boole
 /** Is `el`, or any ancestor below `top`, something we should not read? Memoised per node. */
 function makeBlocked(top: Element | null, h1: Element | null, insideRoot = true): (el: Element) => boolean {
   const memo = new Map<Element, boolean>();
+  const promos = promoBoxes(top);
   const check = (n: Element): boolean => {
     const known = memo.get(n);
     if (known !== undefined) return known;
     const p = n.parentElement;
-    const r = zoneBlocked(n, h1, insideRoot) || (!!p && p !== top && p !== document.documentElement && check(p));
+    const r =
+      promos.has(n) || zoneBlocked(n, h1, insideRoot) || (!!p && p !== top && p !== document.documentElement && check(p));
     memo.set(n, r);
     return r;
   };
   return check;
+}
+
+/**
+ * In-article recirculation boxes: a heading like "Recommended Reading" whose
+ * nearest container (up to 3 levels) is mostly headline links. Whatever the
+ * class names say (The Atlantic's are "ArticleRelatedContent…").
+ */
+function promoBoxes(top: Element | null): Set<Element> {
+  const out = new Set<Element>();
+  for (const h of (top ?? document.body).querySelectorAll(HEADING_SEL)) {
+    const label = (h.textContent ?? '').replace(/\s+/g, ' ').trim();
+    if (label.length > 40 || !PROMO_LABEL.test(label)) continue;
+    let box: Element | null = h.parentElement;
+    for (let up = 0; box && box !== top && up < 3; up++, box = box.parentElement) {
+      const text = (box.textContent ?? '').replace(/\s+/g, ' ').trim().length - label.length;
+      if (text <= 0) continue;
+      if (text > 1500) break;
+      let linked = 0;
+      box.querySelectorAll('a').forEach((a) => (linked += (a.textContent ?? '').replace(/\s+/g, ' ').trim().length));
+      if (linked >= 0.6 * text) {
+        out.add(box);
+        break;
+      }
+    }
+  }
+  return out;
 }
 
 /** Short and mostly links: "Related: …", tag lists, author chips. */
@@ -708,6 +741,18 @@ function liveWalk(root: Element, core: Element = root): Extracted | null {
     }
     if (!body && skipsAt.some((k) => k > i && k <= end)) drop.add(i);
   }
+  // Recirculation boxes inside the article ("Recommended Reading" + headline links, "Read: <headline>"):
+  // drop the label and the short headline lines after it, up to the next heading or real paragraph.
+  out.paragraphs.forEach((p, i) => {
+    if (p.text.length < 140 && PROMO_INLINE.test(p.text)) drop.add(i);
+    if (p.text.length > 40 || !PROMO_LABEL.test(p.text)) return;
+    drop.add(i);
+    for (let j = i + 1; j < out.paragraphs.length; j++) {
+      const q = out.paragraphs[j];
+      if (q.kind === 'heading' || q.text.length >= 100 || /[.!?]["”’)]?$/.test(q.text)) break;
+      drop.add(j);
+    }
+  });
   if (drop.size) {
     out.paragraphs = out.paragraphs.filter((_, i) => !drop.has(i));
     out.blocks = out.blocks.filter((_, i) => !drop.has(i));
