@@ -1,7 +1,7 @@
 import { describe, expect, test } from 'bun:test';
 import { prepareForSpeech } from './speech';
 import { splitNearMiddle } from './split';
-import { cleanTitle } from './title';
+import { chooseTitle, cleanTitle, isJunkTitle } from './title';
 
 describe('prepareForSpeech', () => {
   test('strips citations, urls, emoji', () => {
@@ -48,4 +48,33 @@ describe('splitNearMiddle', () => {
     expect(a.length + b.length).toBe(40);
   });
   test('nothing to split', () => expect(splitNearMiddle('')).toBeNull());
+});
+
+
+describe('chooseTitle', () => {
+  const xJunk = 'Incentivising on X: "https://t.co/zLW6XKmj8g" / X';
+  test('flags X-style titles as junk', () => {
+    expect(isJunkTitle(xJunk)).toBe(true);
+    expect(isJunkTitle('Name on X: "https://t.co/abc" / X')).toBe(true);
+    expect(isJunkTitle('Incentivising (@incentivising) on X')).toBe(true);
+    expect(isJunkTitle('https://example.com/a')).toBe(true);
+    expect(isJunkTitle('How to Do Great Work')).toBe(false);
+    expect(isJunkTitle('Why I like X')).toBe(false);
+    expect(isJunkTitle("Why I'm betting on X")).toBe(false);
+    expect(isJunkTitle('Notes on Twitter: a postmortem')).toBe(false);
+    expect(isJunkTitle('Jane Doe (@jane) / X')).toBe(true);
+    expect(isJunkTitle('Jane Doe on Twitter: "just setting up my twttr"')).toBe(true);
+    expect(isJunkTitle('https://t.co/abc123')).toBe(true);
+    expect(isJunkTitle('Some quote text / X')).toBe(true);
+  });
+  test('falls through junk og:title to the article h1', () => {
+    expect(chooseTitle({ og: 'Incentivising (@incentivising) on X', heading: 'Incentivising', readability: xJunk, doc: xJunk })).toBe('Incentivising');
+  });
+  test('prefers og:title, strips the site name', () => {
+    expect(chooseTitle({ og: 'Why we save articles | Longreads', heading: 'Other', doc: 'x' })).toBe('Why we save articles');
+  });
+  test('uses document title when nothing better exists, even if junk', () => {
+    expect(chooseTitle({ doc: xJunk })).toBe(xJunk);
+    expect(chooseTitle({})).toBe('');
+  });
 });

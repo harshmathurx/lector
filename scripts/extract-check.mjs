@@ -21,5 +21,18 @@ for (const f of process.argv.slice(2)) {
   await send('Runtime.evaluate', { expression: `document.open();document.write(${JSON.stringify(html)});document.close();` });
   const r = await send('Runtime.evaluate', { returnByValue: true, awaitPromise: true, expression: `(()=>{${code};return new Promise(res=>window.__l({type:'EXTRACT_ARTICLE',mode:'article'},{},res))})()` });
   console.log('==', f); console.log(JSON.stringify(r.result.result.value?.paragraphs ?? r.result, null, 1));
+  // Optional assertions in the fixture: <!-- expect: {"has":["text"],"lacks":["text"],"first":"text"} -->
+  const exp = /<!--\s*expect:\s*(\{[\s\S]*?\})\s*-->/.exec(html);
+  if (exp) {
+    const e = JSON.parse(exp[1]);
+    const texts = (r.result.result.value?.paragraphs ?? []).map((p) => p.text);
+    const bad = [];
+    for (const t of e.has ?? []) if (!texts.some((x) => x.includes(t))) bad.push(`missing: ${t}`);
+    for (const t of e.lacks ?? []) if (texts.some((x) => x.includes(t))) bad.push(`should not read: ${t}`);
+    if (e.first && !texts[0]?.includes(e.first)) bad.push(`first is "${texts[0]}", wanted "${e.first}"`);
+    for (const [t, n] of Object.entries(e.count ?? {})) { const c = texts.filter((x) => x === t).length; if (c !== n) bad.push(`"${t}" x${c}, wanted ${n}`); }
+    console.log(bad.length ? `FAIL ${f}\n  ${bad.join('\n  ')}` : `PASS ${f}`);
+    if (bad.length) process.exitCode = 1;
+  }
 }
-chrome.kill(); process.exit(0);
+chrome.kill(); process.exit(process.exitCode ?? 0);
