@@ -6,7 +6,6 @@
 //  3. lets the user Alt+click any paragraph to start reading from there.
 
 import { Readability } from '@mozilla/readability';
-import { chooseTitle } from '../shared/title';
 import type { Article, ArticleParagraph, ContentRequest, ParagraphKind } from '../shared/protocol';
 
 declare global {
@@ -33,8 +32,6 @@ interface TextMap {
   offsetOf: Uint32Array;
   /** Text length of each node when mapped, to notice in-place edits. */
   lens: number[];
-  /** Text offsets of blank-line breaks (`<br><br>`): paragraph boundaries inside one block. */
-  breaks: number[];
   /** Lazily built, case/quote-folded copy of `text` (same length) for searching. */
   canon?: string;
 }
@@ -68,8 +65,6 @@ function buildTextMap(root: Node, wholeDoc = false): TextMap {
   const parts: string[] = [];
   let count = 0;
   let endsSpace = true; // true at the start so leading whitespace is dropped
-  const breaks: number[] = [];
-  let afterBr = -1; // text length right after the last <br>
 
   const emit = (ch: string, nodeIdx: number, offset: number) => {
     parts.push(ch);
@@ -95,10 +90,6 @@ function buildTextMap(root: Node, wholeDoc = false): TextMap {
       const tag = el.tagName.toUpperCase();
       const brk = tag === 'BR' || (wholeDoc && BLOCKISH.has(tag));
       if (brk) space();
-      if (tag === 'BR') {
-        if (count && count === afterBr) breaks.push(count);
-        afterBr = count;
-      }
       el.childNodes.forEach(walk);
       if (wholeDoc && brk) space();
     } else if (node.nodeType === Node.TEXT_NODE) {
@@ -128,7 +119,6 @@ function buildTextMap(root: Node, wholeDoc = false): TextMap {
     nodeOf: Uint32Array.from(nodeOf),
     offsetOf: Uint32Array.from(offsetOf),
     lens: nodes.map((n) => n.length),
-    breaks,
   };
 }
 
@@ -153,7 +143,7 @@ function rangeFor(map: TextMap, start: number, end: number): Range | null {
 // editors): every block is a <div>, so without them a wrapper that is a "leaf" by tag (e.g. a
 // <blockquote> or <li> holding several blocks) would be read as one merged paragraph.
 const BLOCK_SEL =
-  'p,li,h1,h2,h3,h4,h5,h6,[role="heading"],blockquote,pre,dd,dt,figcaption,[data-block="true"],.public-DraftStyleDefault-block';
+  'p,li,h1,h2,h3,h4,h5,h6,blockquote,pre,dd,dt,figcaption,[data-block="true"],.public-DraftStyleDefault-block';
 
 /**
  * Where a paragraph lives on the page. `el` is its live block element when we
@@ -172,39 +162,32 @@ let sources: Source[] = [];
 
 const makeSource = (text: string, el: Element | null): Source => ({ text, el, map: null, relocatedAt: 0 });
 
-function kindOf(el: Element): ParagraphKind {
-  const tag = el.tagName.toUpperCase();
-  if (/^H[1-6]$/.test(tag) || el.getAttribute('role') === 'heading') return 'heading';
+function kindOf(tag: string): ParagraphKind {
+  if (/^H[1-6]$/.test(tag)) return 'heading';
   if (tag === 'BLOCKQUOTE') return 'quote';
   if (tag === 'LI' || tag === 'DD' || tag === 'DT') return 'list';
   return 'text';
 }
 
+const isBold = (n: Node | null): n is Element =>
+  !!n && n.nodeType === Node.ELEMENT_NODE && /^(B|STRONG)$/.test((n as Element).tagName.toUpperCase());
+
 const isBlank = (n: Node): boolean => n.nodeType === Node.TEXT_NODE && !(n as Text).data.trim();
 
 /**
- * A line that is one bold run, followed by a line break and more text, is a
- * heading. `text` is the paragraph (or the part of the block between blank
- * lines) being read; returns the heading, a prefix of `text`.
+ * A block that opens with a bold run ending in a line break, followed by more
+ * text, starts with a heading: returns that heading's text (a prefix of `text`).
  */
 function leadHeading(el: Element, text: string): string | null {
-  const sibling = (n: Node, dir: 'previousSibling' | 'nextSibling'): Node | null => {
-    let x = n[dir];
-    while (x && isBlank(x)) x = x[dir];
-    return x;
-  };
-  for (const b of el.querySelectorAll('b,strong')) {
-    if (b.parentElement?.closest('b,strong') && el.contains(b.parentElement.closest('b,strong'))) continue; // inner of a bold run
-    let top: Node = b; // <span><strong>…</strong></span>: judge the outermost wrapper
-    while (top.parentElement && top.parentElement !== el && Array.from(top.parentElement.childNodes).filter((n) => !isBlank(n)).length === 1) top = top.parentElement;
-    if (top.parentElement !== el) continue;
-    const before = sibling(top, 'previousSibling');
-    if ((before && before.nodeName !== 'BR') || sibling(top, 'nextSibling')?.nodeName !== 'BR') continue;
-    const lead = buildTextMap(top).text.trim();
-    if (lead.length < 2 || lead.length > 150 || !text.startsWith(lead)) continue;
-    return text.length - lead.length >= minLength('text') ? lead : null;
+  const kids = Array.from(el.childNodes).filter((n) => !isBlank(n));
+  let bold: Node | null = kids[0] ?? null;
+  while (bold && !isBold(bold) && bold.nodeType === Node.ELEMENT_NODE && bold.childNodes.length === 1) {
+    bold = bold.firstChild; // <span><strong>…</strong></span>
   }
-  return null;
+  if (!isBold(bold) || kids[1]?.nodeName !== 'BR') return null;
+  const lead = buildTextMap(kids[0]).text.trim();
+  if (lead.length < 2 || lead.length > 150 || !text.startsWith(lead)) return null;
+  return text.length - lead.length >= minLength('text') ? lead : null;
 }
 
 function isLeafBlock(el: Element): boolean {
@@ -218,44 +201,11 @@ function minLength(kind: ParagraphKind): number {
 interface Extracted {
   paragraphs: ArticleParagraph[];
   blocks: Source[];
-  /** The article's own h1 text, when found (feeds the title). */
-  h1?: string;
-  /** Readability's title guess. */
-  parsedTitle?: string;
-}
-
-/** Adds `t` (a live leaf block, or Readability's own element when it has no live twin) to `out`. */
-function addBlock(out: Extracted, seen: Set<Element>, t: Element | null, el: Element, minText = minLength('text')): void {
-  if (t && seen.has(t)) return;
-  const map = buildTextMap(t ?? el);
-  const kind = kindOf(t ?? el);
-  // A blank line (<br><br>) inside one block is a paragraph break, as Readability treats it in its own copy.
-  const cuts = [0, ...map.breaks, map.text.length];
-  let added = false;
-  for (let i = 0; i + 1 < cuts.length; i++) {
-    const text = map.text.slice(cuts[i], cuts[i + 1]).trim();
-    if (text.length < (kind === 'text' ? minText : minLength(kind))) continue;
-    added = true;
-    // "<b>1/ Stop waiting.</b><br>Body…" (X Articles, many blogs): the bold
-    // lead line is a heading. Both parts keep the element; highlighting finds
-    // each one's text inside it.
-    const lead = kind === 'text' ? leadHeading(t ?? el, text) : null;
-    if (lead) {
-      out.paragraphs.push({ text: lead, kind: 'heading' });
-      out.blocks.push(makeSource(lead, t));
-      const rest = text.slice(lead.length).trim();
-      out.paragraphs.push({ text: rest, kind });
-      out.blocks.push(makeSource(rest, t));
-    } else {
-      out.paragraphs.push({ text, kind });
-      out.blocks.push(makeSource(text, t));
-    }
-  }
-  if (added && t) seen.add(t);
 }
 
 function collect(elements: Iterable<Element>, liveFor: (el: Element) => Element | null): Extracted {
-  const out: Extracted = { paragraphs: [], blocks: [] };
+  const paragraphs: ArticleParagraph[] = [];
+  const outBlocks: Source[] = [];
   const seen = new Set<Element>();
   for (const el of elements) {
     if (!isLeafBlock(el)) continue;
@@ -265,236 +215,29 @@ function collect(elements: Iterable<Element>, liveFor: (el: Element) => Element 
     // A leaf in Readability's copy can map to a live wrapper of several blocks
     // (it strips Draft.js markers): read the live leaves instead of one merged text.
     const targets = live && !isLeafBlock(live) ? Array.from(live.querySelectorAll(BLOCK_SEL)).filter(isLeafBlock) : [live];
-    for (const t of targets) addBlock(out, seen, t, el);
-  }
-  return out;
-}
-
-// ─── Live-DOM reading ───────────────────────────────────────────────────────
-// Readability is good at FINDING the article and bad at keeping all of it: it
-// deletes headings with "header"/"menu" classes, figcaptions, link-heavy lists.
-// So it only locates the content; we read the live DOM under the root it found
-// (the approach of the open-source Read Aloud extension), skipping chrome by
-// structure, and fall back to Readability's own output when that looks wrong.
-
-const debug = (...a: unknown[]): void => console.debug('[Lector page]', ...a);
-
-/** Tags that are page chrome or not prose, wherever they sit under the root. */
-const SKIP_ZONE = new Set(['NAV', 'ASIDE', 'FOOTER', 'FORM', 'DIALOG', 'MENU', 'NOSCRIPT', 'SVG', 'BUTTON', 'SELECT', 'TEXTAREA', 'TEMPLATE', 'SCRIPT', 'STYLE', 'IFRAME']);
-const SKIP_ROLE = /^(navigation|complementary|contentinfo|banner|search|dialog|alertdialog|menu|menubar|toolbar)$/;
-/** Applied to DESCENDANTS of the root only (never the root or its ancestors). */
-const JUNK_NAME = /share|social|subscribe|newsletter|related|recommend|promo|advert|sponsor|cookie|comment|breadcrumb|toolbar|byline-actions|reflist|references|navbox|catlinks|editsection|printfooter|sidebar|hatnote|byline/i;
-const HEADING_SEL = 'h1,h2,h3,h4,h5,h6,[role="heading"]';
-/** Elements whose presence means a div is a wrapper, not a text block. */
-const WRAPPER_SEL = `${BLOCK_SEL},div,section,article,ul,ol,table,aside,nav,header,footer,figure,form,main,details`;
-
-const isTextDiv = (el: Element): boolean => /^(DIV|SECTION)$/i.test(el.tagName) && !el.querySelector(WRAPPER_SEL);
-/** A block we read as one paragraph: a leaf block, or a plain div/section holding only text (not inside another block). */
-const isReadable = (el: Element): boolean =>
-  el.matches(BLOCK_SEL) ? isLeafBlock(el) : isTextDiv(el) && !el.parentElement?.closest(BLOCK_SEL);
-
-function zoneBlocked(n: Element, h1: Element | null): boolean {
-  if (SKIP_ZONE.has(n.tagName.toUpperCase())) return true;
-  if (n.hasAttribute('hidden') || n.hasAttribute('inert') || n.getAttribute('aria-hidden') === 'true') return true;
-  const role = n.getAttribute('role');
-  if (role && SKIP_ROLE.test(role)) return true;
-  if (n.tagName === 'HEADER' && h1 && !n.contains(h1)) return true;
-  if (JUNK_NAME.test(n.getAttribute('class') ?? '') || JUNK_NAME.test(n.id)) return true;
-  const cs = getComputedStyle(n);
-  return cs.display === 'none' || cs.visibility === 'hidden' || cs.visibility === 'collapse';
-}
-
-/** Is `el`, or any ancestor below `top`, something we should not read? Memoised per node. */
-function makeBlocked(top: Element | null, h1: Element | null): (el: Element) => boolean {
-  const memo = new Map<Element, boolean>();
-  const check = (n: Element): boolean => {
-    const known = memo.get(n);
-    if (known !== undefined) return known;
-    const p = n.parentElement;
-    const r = zoneBlocked(n, h1) || (!!p && p !== top && p !== document.documentElement && check(p));
-    memo.set(n, r);
-    return r;
-  };
-  return check;
-}
-
-/** Short and mostly links: "Related: …", tag lists, author chips. */
-function linkDense(el: Element, textLen: number): boolean {
-  if (textLen >= 80) return false;
-  if (el.closest('a')) return true;
-  let linked = 0;
-  el.querySelectorAll('a').forEach((a) => (linked += (a.textContent ?? '').replace(/\s+/g, ' ').trim().length));
-  return linked >= 0.7 * textLen;
-}
-
-const charsOf = (e: Extracted): number => e.paragraphs.reduce((n, p) => n + p.text.length, 0);
-
-/** Sum of text lengths of live source elements, per element and every ancestor. */
-function weighAncestors(blocks: Source[]): { weights: Map<Element, number>; total: number } {
-  const weights = new Map<Element, number>();
-  let total = 0;
-  for (const b of blocks) {
-    if (!b.el) continue;
-    total += b.text.length;
-    for (let n: Element | null = b.el; n; n = n.parentElement) weights.set(n, (weights.get(n) ?? 0) + b.text.length);
-  }
-  return { weights, total };
-}
-
-const depthOf = (el: Element): number => {
-  let d = 0;
-  for (let n = el.parentElement; n; n = n.parentElement) d++;
-  return d;
-};
-
-function textSize(root: Element): number {
-  let n = 0;
-  const w = document.createTreeWalker(root, NodeFilter.SHOW_TEXT | NodeFilter.SHOW_ELEMENT, {
-    acceptNode: (node) =>
-      node.nodeType === Node.ELEMENT_NODE
-        ? /^(SCRIPT|STYLE|NOSCRIPT|TEMPLATE|SVG)$/i.test((node as Element).tagName)
-          ? NodeFilter.FILTER_REJECT
-          : NodeFilter.FILTER_SKIP
-        : NodeFilter.FILTER_ACCEPT,
-  });
-  for (let t = w.nextNode(); t; t = w.nextNode()) n += (t as Text).data.trim().length;
-  return n;
-}
-
-/**
- * Readability rewrites some blocks (bare-text divs, <br> runs) into new <p>s with no live twin.
- * Pair those with the live leaf block whose text is identical, so the root can still be found.
- */
-function pairByText(blocks: Source[]): Source[] {
-  const wanted = new Map<string, number>();
-  for (const b of blocks) if (!b.el) wanted.set(b.text, (wanted.get(b.text) ?? 0) + 1);
-  if (!wanted.size) return blocks;
-  const live = new Map<string, Element[]>();
-  for (const el of document.body.querySelectorAll(`${BLOCK_SEL},div,section`)) {
-    if (!isReadable(el)) continue;
-    const text = buildTextMap(el).text;
-    if (wanted.has(text)) live.set(text, [...(live.get(text) ?? []), el]);
-  }
-  return blocks.map((b) => (b.el ? b : { ...b, el: live.get(b.text)?.shift() ?? null }));
-}
-
-/** The live element that contains the article Readability found, or null when we cannot tell. */
-function findRoot(classic: Extracted): Element | null {
-  const want = charsOf(classic);
-  let { weights, total } = weighAncestors(classic.blocks);
-  if (total < want * 0.8) ({ weights, total } = weighAncestors(pairByText(classic.blocks)));
-  if (!total) return null;
-  let root: Element | null = null;
-  let best = -1;
-  for (const [el, w] of weights) {
-    if (w < total * 0.8) continue;
-    const d = depthOf(el);
-    if (d > best) {
-      best = d;
-      root = el;
-    }
-  }
-  // A lone paragraph is its own deepest ancestor: read from its container instead.
-  while (root && root !== document.body && isReadable(root)) root = root.parentElement;
-  const sane = (el: Element | null): el is Element =>
-    !!el && el !== document.body && el !== document.documentElement && textSize(el) <= want * 3;
-  if (sane(root)) return root;
-  // Too wide (a scattered article, or a page wrapper): the landmark holding most of the text.
-  let landmark: Element | null = null;
-  let most = 0;
-  for (const el of document.querySelectorAll('article, main, [role="main"]')) {
-    const w = weights.get(el) ?? 0;
-    if (w > most) {
-      most = w;
-      landmark = el;
-    }
-  }
-  return most >= total * 0.5 && sane(landmark) ? landmark : null;
-}
-
-/**
- * The article's own title heading and other headings that sit just before the
- * root (a title above the body in its own wrapper, Substack's subtitle...).
- */
-function headingsBefore(root: Element): { h1: Element | null; extras: Element[] } {
-  const extras: Element[] = [];
-  let h1: Element | null = null;
-  let path: Element = root;
-  for (let level = 0; level < 4 && path.parentElement && path.parentElement !== document.body; level++) {
-    const parent: Element = path.parentElement;
-    const blocked = makeBlocked(parent, null);
-    const before: Element[] = [];
-    for (let sib = path.previousElementSibling; sib; sib = sib.previousElementSibling) before.push(sib);
-    for (const sib of before) {
-      if (blocked(sib)) continue;
-      if (!h1) {
-        const found = sib.matches('h1') ? sib : sib.querySelector('h1');
-        if (found && !blocked(found)) h1 = found;
+    for (const t of targets) {
+      if (t && seen.has(t)) continue;
+      const text = buildTextMap(t ?? el).text;
+      const kind = kindOf((t ?? el).tagName.toUpperCase());
+      if (text.length < minLength(kind)) continue;
+      if (t) seen.add(t);
+      // "<b>1/ Stop waiting.</b><br>Body…" (X Articles, many blogs): the bold
+      // lead line is a heading. Both parts keep the element; highlighting finds
+      // each one's text inside it.
+      const lead = kind === 'text' ? leadHeading(t ?? el, text) : null;
+      if (lead) {
+        paragraphs.push({ text: lead, kind: 'heading' });
+        outBlocks.push(makeSource(lead, t));
+        const rest = text.slice(lead.length).trim();
+        paragraphs.push({ text: rest, kind });
+        outBlocks.push(makeSource(rest, t));
+        continue;
       }
-      if (level === 0 && sib.matches(HEADING_SEL)) extras.push(sib);
+      paragraphs.push({ text, kind });
+      outBlocks.push(makeSource(text, t));
     }
-    if (h1) {
-      if (!extras.includes(h1)) extras.push(h1);
-      break;
-    }
-    path = parent;
   }
-  extras.sort((a, b) => (a.compareDocumentPosition(b) & Node.DOCUMENT_POSITION_FOLLOWING ? -1 : 1));
-  return { h1, extras };
-}
-
-function liveWalk(root: Element): Extracted | null {
-  const before = headingsBefore(root);
-  const rawBlocked = makeBlocked(root, null);
-  const h1 = Array.from(root.querySelectorAll('h1')).find((h) => !rawBlocked(h)) ?? before.h1;
-  const inRoot = makeBlocked(root, h1);
-  const out: Extracted = { paragraphs: [], blocks: [] };
-  const seen = new Set<Element>();
-  let lastWasHeading = false; // the block just read is a heading (not the first one)
-  const run = (el: Element, blocked: ((e: Element) => boolean) | null) => {
-    if (!isReadable(el) || blocked?.(el)) return;
-    const tag = el.tagName.toUpperCase();
-    const isHeading = /^H[1-6]$/.test(tag) || el.getAttribute('role') === 'heading';
-    const text = buildTextMap(el).text;
-    if (tag === 'PRE' && text.length > 200) return; // code, not prose
-    if (!isHeading && linkDense(el, text.length)) {
-      // "Keep reading" above a list of links we skipped: drop the orphaned heading too.
-      if (lastWasHeading && out.blocks[out.blocks.length - 1]?.el?.parentElement?.contains(el)) {
-        out.paragraphs.pop();
-        out.blocks.pop();
-      }
-      lastWasHeading = false;
-      return;
-    }
-    const n = out.paragraphs.length;
-    addBlock(out, seen, el, el, /^(DIV|SECTION)$/.test(tag) ? 20 : minLength('text'));
-    lastWasHeading = isHeading && out.paragraphs.length > n && n > 0;
-  };
-  for (const el of before.extras) run(el, null); // already vetted by headingsBefore
-  for (const el of root.querySelectorAll(`${BLOCK_SEL},div,section`)) run(el, inRoot);
-  while (out.paragraphs.length > 1 && out.paragraphs[out.paragraphs.length - 1].kind === 'heading') {
-    out.paragraphs.pop(); // a heading at the very end introduced something we did not read
-    out.blocks.pop();
-  }
-  if (h1) out.h1 = buildTextMap(h1).text;
-  return out.paragraphs.length ? out : null;
-}
-
-/** Readability finds the article; the live DOM under its root is what we read. Null = use Readability's output. */
-function readLive(classic: Extracted): Extracted | null {
-  try {
-    const root = findRoot(classic);
-    if (!root) return debug('extract: no usable live root'), null;
-    const live = liveWalk(root);
-    if (!live) return debug('extract: live walk found nothing'), null;
-    const mine = charsOf(live);
-    const theirs = charsOf(classic);
-    if (mine < theirs * 0.7) return debug(`extract: live walk too thin (${mine} vs ${theirs} chars)`), null;
-    return live;
-  } catch (e) {
-    warnOnce('live walk failed', e);
-    return null;
-  }
+  return { paragraphs, blocks: outBlocks };
 }
 
 function extractWithReadability(): Extracted | null {
@@ -513,20 +256,12 @@ function extractWithReadability(): Extracted | null {
   if (!parsed?.content) return null;
 
   const doc = new DOMParser().parseFromString(parsed.content, 'text/html');
-  const classic = collect(doc.body.querySelectorAll(BLOCK_SEL), (el) => {
+  const result = collect(doc.body.querySelectorAll(BLOCK_SEL), (el) => {
     const i = el.getAttribute('data-vb-i');
     return i !== null ? liveBlocks[Number(i)] ?? null : null;
   });
-  classic.parsedTitle = parsed.title ?? undefined;
-  if (!classic.paragraphs.length) return parsed.textContent ? fromPlainText(parsed.textContent) : null;
-  const live = readLive(classic);
-  if (live) {
-    debug(`extract: live root, ${live.paragraphs.length} paragraphs (readability: ${classic.paragraphs.length})`);
-    live.parsedTitle = classic.parsedTitle;
-    return live;
-  }
-  debug(`extract: readability blocks, ${classic.paragraphs.length} paragraphs`);
-  return classic;
+  if (result.paragraphs.length) return result;
+  return parsed.textContent ? fromPlainText(parsed.textContent) : null;
 }
 
 /** Minimal-markup pages (text + <br>s): split Readability's plain text. */
@@ -643,7 +378,7 @@ function hereIndex(list: Source[], selection: Selection | null): number | null {
 
 function extract(mode: 'article' | 'selection' | 'fromSelection'): Article | null {
   const lang = document.documentElement.lang || 'en';
-  const docTitle = document.title.trim();
+  const title = document.title.trim();
   const selection = window.getSelection();
   const selectedText = selection?.toString().trim() ?? '';
 
@@ -657,7 +392,7 @@ function extract(mode: 'article' | 'selection' | 'fromSelection'): Article | nul
     resetHighlightState();
     sources = paragraphs.map((p) => makeSource(p.text, null));
     seedDocHintFromSelection(selection);
-    return { title: docTitle || 'Selected text', lang, url: location.href, paragraphs, startParagraph: 0, site: siteName() };
+    return { title: title || 'Selected text', lang, url: location.href, paragraphs, startParagraph: 0, site: siteName() };
   }
 
   const extracted = extractWithReadability() ?? extractFallback();
@@ -668,18 +403,11 @@ function extract(mode: 'article' | 'selection' | 'fromSelection'): Article | nul
   const paragraphs = extracted.paragraphs;
   const list = extracted.blocks;
   const first = paragraphs[0]?.text.toLowerCase() ?? '';
-  // The page's own name for the article: og:title, the article h1, Readability's guess, then the tab title
-  // (X's tab title is `Name on X: "https://t.co/…" / X`; its og:title and h1 are usable).
-  const title =
-    chooseTitle({ og: meta('meta[property="og:title"]'), heading: extracted.h1, readability: extracted.parsedTitle, doc: docTitle }) || docTitle;
-  const split = (t: string) => t.split(/\s+[|–—·•]\s+|\s+-\s+/).map((p) => p.trim()).filter(Boolean);
-  const parts = [...split(title), ...split(docTitle)];
+  const parts = title.split(/\s+[|–—·•]\s+|\s+-\s+/).map((p) => p.trim()).filter(Boolean);
   const hasTitleFirst =
-    !title ||
-    (!!extracted.h1 && first === extracted.h1.toLowerCase()) ||
-    parts.some((p) => first === p.toLowerCase() || p.toLowerCase().startsWith(first) || first.startsWith(p.toLowerCase()));
+    !title || parts.some((p) => first === p.toLowerCase() || p.toLowerCase().startsWith(first) || first.startsWith(p.toLowerCase()));
   let offset = 0;
-  const spoken = split(title).reduce((a, b) => (b.length > a.length ? b : a), title);
+  const spoken = parts.length ? parts.reduce((a, b) => (b.length > a.length ? b : a)) : title;
   if (!hasTitleFirst && spoken.length > 2) {
     paragraphs.unshift({ text: spoken, kind: 'heading' });
     list.unshift(makeSource(spoken, null));
@@ -859,8 +587,8 @@ function viaDoc(i: number, seg: string, start: number): Resolved | null {
 /** The block element was swapped out: find the element on the page with the same text. */
 function relocate(src: Source): void {
   if (Date.now() - src.relocatedAt < 3000) return;
-  const hit = Array.from(document.body.querySelectorAll(`${BLOCK_SEL},div,section`)).find(
-    (el) => isReadable(el) && (el.textContent ?? '').replace(/\s+/g, ' ').trim() === src.text && buildTextMap(el).text === src.text
+  const hit = Array.from(document.body.querySelectorAll(BLOCK_SEL)).find(
+    (el) => isLeafBlock(el) && (el.textContent ?? '').replace(/\s+/g, ' ').trim() === src.text && buildTextMap(el).text === src.text
   );
   if (hit) {
     src.el = hit;
