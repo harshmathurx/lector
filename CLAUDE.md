@@ -37,8 +37,13 @@ Background SW (background.ts)         Lifecycle + routing only. Extracts article
 │                                      the session in chrome.storage.session so it can RECOVER if Chrome kills the
 │                                      offscreen doc (it does after 30s without audio). Context menu, shortcuts, badge,
 │                                      5-min idle alarm closes the offscreen doc (Chrome usually closes it ~30s after audio stops).
-Content script (content.ts)           Injected ON DEMAND (activeTab). Readability on a clone, but paragraph text comes from
-│                                      the LIVE DOM (temporary data-vb-i attrs map clone→live) so we keep a text↔DOM map.
+Content script (content.ts)           Injected ON DEMAND (activeTab). Extraction (v0.5): Readability on a clone only FINDS the
+│                                      article (data-vb-i attrs map clone→live → live root); we then READ the live DOM in order
+│                                      inside that root (headings, p, li, quotes, figcaptions, dt/dd, bold lead lines, mixed text
+│                                      runs), skipping chrome (nav/aside/footer/forms/hidden, junk class tokens, recirculation
+│                                      boxes, metadata lines, link-only blocks, code >200 chars). Falls back to Readability's
+│                                      own blocks when the live walk misses >10% of its text. Pieces split from one element
+│                                      carry a `base` offset so highlight / Alt+click / listen-from-here hit the right piece.
 │                                      Highlights the spoken sentence via CSS Custom Highlight API (no DOM changes),
 │                                      smart auto-scroll (yields to user scrolling), Alt+click paragraph = read from here.
 Offscreen (offscreen.ts, engine.ts, engine.worker.ts, cache.ts)
@@ -116,6 +121,18 @@ Windows media flyout, VoiceOver/NVDA scripts in `scratchpad/06-a11y-audit.md`, W
 - Pauses by ending: `?`/`!` 220ms, `.` 180, `: ; —` 160, `,` 100, forced 40, paragraph 450, heading 700.
 - Engine guard (`engine.worker.ts`): wraps kokoro-js's tokenizer; over 500 tokens → split near the middle (`shared/split.ts`) and join audio, never truncate.
 Segments are offsets into the ORIGINAL paragraph text so the page can highlight them; `speech.ts` cleans text per segment AFTER chunking and calls `normalize.ts` (rule-based verbalizer: currency+magnitudes incl. attributive "dollar valuation", %, ranges, ordinals, fractions, units, dates/times, contextual Roman numerals, initialisms kokoro mangles, versions, @/#, X "1/" numbering; ported from misaki, Apache-2.0). Its output must stay stable under kokoro-js's own normalizer (tests check). No LLM: considered and rejected (download size, seconds-to-minutes before first audio, rewrites words and breaks highlight offsets).
+
+## Extraction quality (measure, don't guess)
+
+Why the rewrite: Readability deletes elements whose class contains "header"/"menu"/"social"/"related"…, h1/h2 with
+negative class weight, and short wrapped headings, so Substack/Wikipedia/Notion lost most section headings.
+`scripts/extract-eval.mjs` scores Lector vs Readability vs Defuddle on 33 real pages (`tests/extract-eval/urls.txt`;
+snapshots cached outside git): char recall, heading recall, junk. v0.5 numbers: heading recall 79% → 95%, junk 7127 → 2867
+chars, mean char recall 98% (the remaining gap is code blocks / link lists we skip on purpose). Run it after any change
+to content.ts (cached rerun ≈ 15s, never `--refresh` unless you mean to re-capture). Fixtures with `<!-- expect: -->`
+assertions: `bun scripts/extract-check.mjs tests/fixtures/*.html`; pieces/highlight/Alt+click: `bun scripts/highlight-check.mjs`.
+Both need CHROME_PATH (Chrome for Testing). How other readers do it: Read Aloud (ken107) walks the live DOM with a
+skip-list (our model); Chrome Reading Mode uses an on-device model over the AX tree; Firefox Reader View is Readability.
 
 ## Architecture Decisions Made (and why)
 
