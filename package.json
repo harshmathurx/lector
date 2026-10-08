@@ -19,6 +19,7 @@
   },
   "devDependencies": {
     "@types/chrome": "^0.1.14",
+    "defuddle": "^0.19.4",
     "typescript": "^5.6.0"
   },
   "description": "Listen to any web page with natural AI voices, entirely on your device (Chrome extension, Kokoro TTS).",
