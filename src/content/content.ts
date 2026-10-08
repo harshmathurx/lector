@@ -169,6 +169,27 @@ function kindOf(tag: string): ParagraphKind {
   return 'text';
 }
 
+const isBold = (n: Node | null): n is Element =>
+  !!n && n.nodeType === Node.ELEMENT_NODE && /^(B|STRONG)$/.test((n as Element).tagName.toUpperCase());
+
+const isBlank = (n: Node): boolean => n.nodeType === Node.TEXT_NODE && !(n as Text).data.trim();
+
+/**
+ * A block that opens with a bold run ending in a line break, followed by more
+ * text, starts with a heading: returns that heading's text (a prefix of `text`).
+ */
+function leadHeading(el: Element, text: string): string | null {
+  const kids = Array.from(el.childNodes).filter((n) => !isBlank(n));
+  let bold: Node | null = kids[0] ?? null;
+  while (bold && !isBold(bold) && bold.nodeType === Node.ELEMENT_NODE && bold.childNodes.length === 1) {
+    bold = bold.firstChild; // <span><strong>…</strong></span>
+  }
+  if (!isBold(bold) || kids[1]?.nodeName !== 'BR') return null;
+  const lead = buildTextMap(kids[0]).text.trim();
+  if (lead.length < 2 || lead.length > 150 || !text.startsWith(lead)) return null;
+  return text.length - lead.length >= minLength('text') ? lead : null;
+}
+
 function isLeafBlock(el: Element): boolean {
   return !el.querySelector(BLOCK_SEL);
 }
@@ -200,6 +221,18 @@ function collect(elements: Iterable<Element>, liveFor: (el: Element) => Element 
       const kind = kindOf((t ?? el).tagName.toUpperCase());
       if (text.length < minLength(kind)) continue;
       if (t) seen.add(t);
+      // "<b>1/ Stop waiting.</b><br>Body…" (X Articles, many blogs): the bold
+      // lead line is a heading. Both parts keep the element; highlighting finds
+      // each one's text inside it.
+      const lead = kind === 'text' ? leadHeading(t ?? el, text) : null;
+      if (lead) {
+        paragraphs.push({ text: lead, kind: 'heading' });
+        outBlocks.push(makeSource(lead, t));
+        const rest = text.slice(lead.length).trim();
+        paragraphs.push({ text: rest, kind });
+        outBlocks.push(makeSource(rest, t));
+        continue;
+      }
       paragraphs.push({ text, kind });
       outBlocks.push(makeSource(text, t));
     }
