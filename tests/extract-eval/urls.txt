@@ -1,0 +1,35 @@
+# Corpus for scripts/extract-eval.mjs: "<category> <url>" per line. Public, no-login pages.
+# Pages change over time (news especially); the cache pins the snapshot, so reruns are stable until --refresh.
+substack https://www.astralcodexten.com/p/an-open-letter-to-steven-pinker-on
+substack https://www.noahpinion.blog/p/what-the-ai-boom-is-doing-for-americans
+substack https://newsletter.pragmaticengineer.com/p/the-state-of-the-tech-industry-in
+medium https://netflixtechblog.com/leave-the-class-path-in-the-rearview-mirror-67a85b15b6be
+medium https://netflixtechblog.com/maps-netflixs-multimodal-asset-personalization-at-scale-32f96320785e
+ghost https://www.platformer.news/does-intelligence-need-a-hard-cap/
+wordpress https://css-tricks.com/css-random-function-polyfill/
+wordpress https://techcrunch.com/2026/10/07/robot-data-startup-mecka-ai-nabs-60m-from-sequoia/
+wordpress https://smashingmagazine.com/2026/10/how-name-things/
+news-bbc https://www.bbc.co.uk/news/articles/cmwyq34qexdzo
+news-guardian https://www.theguardian.com/global-development/2026/oct/06/ethiopia-tigray-conflict-tplf-rebels-forcibly-recruit-boys-war-crimes
+news-npr https://www.npr.org/2026/10/08/nx-s1-5994868/maricarmen-eviction-spain-dies
+wikipedia https://en.wikipedia.org/wiki/Speech_synthesis
+wikipedia https://en.wikipedia.org/wiki/Chesapeake_Bay
+personal https://www.paulgraham.com/greatwork.html
+personal https://overreacted.io/a-social-filesystem/
+personal https://jvns.ca/blog/2026/07/21/more-nice-django-things/
+devblog https://github.blog/engineering/architecture-optimization/building-git-infrastructure-for-agent-scale-development/
+devblog https://blog.cloudflare.com/agentic-security-operations/
+devblog https://stripe.com/blog/where-pricing-is-headed
+docs https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/Intl/Segmenter
+recipe https://www.simplyrecipes.com/recipes/perfect_guacamole/
+magazine https://www.theatlantic.com/technology/2026/10/ai-hacking-cybersecurity-race/688911/
+readme https://github.com/mozilla/readability
+x-article https://x.com/incentivising/status/2068248923563573366
+x-article https://x.com/anujonchain/article/2103810201262735445
+forum https://www.lesswrong.com/posts/o8roRrdisBAjngHJN/a-summary-of-a-viral-chinese-essay-on-what-a-deepseek-kernel
+forum https://forum.effectivealtruism.org/posts/R8AAG4QBZi5puvogR/effective-altruism-in-the-age-of-agi
+notion https://hof9.notion.site/Public-Notes-34e4d35c55de4780bdbb323fccd9b6f2
+notion https://sinocism.notion.site/Qiushi-Issue-18-September-16-2026-Summaries-and-Selected-Translations-3dd84ece41d781eb80b5d587a0357e1c
+numbered-bold https://fs.blog/mental-models/
+listicle https://www.nngroup.com/articles/ten-usability-heuristics/
+listicle https://www.wired.com/story/best-prime-day-tech-deals-10-07-2026/
