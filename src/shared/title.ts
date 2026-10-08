@@ -1,7 +1,7 @@
 // Page titles arrive as "Why we save articles | Longreads". Keep the part that
 // is the article (the longest), drop the site.
 
-const SEPARATOR = /\s+[|–—·•]\s+|\s+-\s+/;
+export const SEPARATOR = /\s+[|–—·•]\s+|\s+-\s+/;
 
 export function cleanTitle(title: string | undefined): string {
   if (!title) return '';
@@ -16,11 +16,10 @@ export function cleanTitle(title: string | undefined): string {
 export function isJunkTitle(title: string | undefined): boolean {
   const t = (title ?? '').trim();
   if (t.length < 3) return true;
-  if (/^(https?:\/\/|www\.)\S*$/i.test(t) || /^@\w+$/.test(t)) return true;
-  if (/https?:\/\/t\.co\//i.test(t)) return true;
-  if (/\(@\w+\)/.test(t)) return true; // "Name (@handle) on X"
-  if (/\bon (X|Twitter)(:|$)/i.test(t)) return true;
-  if (/^.{0,80}\s\/\sX$/.test(t) && /["“]/.test(t)) return true;
+  if (/^(https?:\/\/|www\.)\S*$/i.test(t) || /^@\w+$/.test(t)) return true; // a bare URL or handle (t.co links included)
+  if (/^.+ on (X|Twitter): ".*"( \/ (X|Twitter))?$/s.test(t)) return true; // Name on X: "tweet text" / X
+  if (/\s\(@\w+\)(\s+(on|\/)\s+(X|Twitter))?$/i.test(t)) return true; // "Name (@handle) on X"
+  if (/\s\/\s(X|Twitter)$/.test(t)) return true; // trailing " / X"
   return false;
 }
 

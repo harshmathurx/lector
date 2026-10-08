@@ -60,6 +60,12 @@ describe('chooseTitle', () => {
     expect(isJunkTitle('https://example.com/a')).toBe(true);
     expect(isJunkTitle('How to Do Great Work')).toBe(false);
     expect(isJunkTitle('Why I like X')).toBe(false);
+    expect(isJunkTitle("Why I'm betting on X")).toBe(false);
+    expect(isJunkTitle('Notes on Twitter: a postmortem')).toBe(false);
+    expect(isJunkTitle('Jane Doe (@jane) / X')).toBe(true);
+    expect(isJunkTitle('Jane Doe on Twitter: "just setting up my twttr"')).toBe(true);
+    expect(isJunkTitle('https://t.co/abc123')).toBe(true);
+    expect(isJunkTitle('Some quote text / X')).toBe(true);
   });
   test('falls through junk og:title to the article h1', () => {
     expect(chooseTitle({ og: 'Incentivising (@incentivising) on X', heading: 'Incentivising', readability: xJunk, doc: xJunk })).toBe('Incentivising');
