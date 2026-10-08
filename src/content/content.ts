@@ -6,7 +6,7 @@
 //  3. lets the user Alt+click any paragraph to start reading from there.
 
 import { Readability } from '@mozilla/readability';
-import { chooseTitle } from '../shared/title';
+import { chooseTitle, cleanTitle, SEPARATOR } from '../shared/title';
 import type { Article, ArticleParagraph, ContentRequest, ParagraphKind } from '../shared/protocol';
 
 declare global {
@@ -165,12 +165,31 @@ interface Source {
   el: Element | null;
   map: TextMap | null; // built lazily for highlighting
   relocatedAt: number; // last failed attempt to find `el` again (ms)
+  /**
+   * Where this paragraph starts inside buildTextMap(el).text (after trim), and its length. Several sources share
+   * one `el` when a block is split (`<br><br>`, a bold lead line) or when a container's own text runs are read
+   * (`<div>Lead<p>…</p></div>`); `base` tells them apart.
+   */
+  base: number;
+  len: number;
+  /** Text length of the whole element when extracted: relocate() must find the same element, not one that merely starts alike. */
+  elLen: number;
+  tag: string;
 }
 
 /** Sources of the last extraction, indexed by paragraph index. */
 let sources: Source[] = [];
 
-const makeSource = (text: string, el: Element | null): Source => ({ text, el, map: null, relocatedAt: 0 });
+const makeSource = (text: string, el: Element | null, base = 0, elLen = text.length): Source => ({
+  text,
+  el,
+  map: null,
+  relocatedAt: 0,
+  base,
+  len: text.length,
+  elLen,
+  tag: el?.tagName ?? '',
+});
 
 function kindOf(el: Element): ParagraphKind {
   const tag = el.tagName.toUpperCase();
@@ -224,34 +243,51 @@ interface Extracted {
   parsedTitle?: string;
 }
 
-/** Adds `t` (a live leaf block, or Readability's own element when it has no live twin) to `out`. */
-function addBlock(out: Extracted, seen: Set<Element>, t: Element | null, el: Element, minText = minLength('text')): void {
-  if (t && seen.has(t)) return;
-  const map = buildTextMap(t ?? el);
+/**
+ * Adds `t` (a live leaf block, or Readability's own element when it has no live twin) to `out`. `map` is the
+ * element's text map when the caller already has it. `range` limits reading to a slice of the element's text (a
+ * container's own text run); such a slice is not tracked in `seen`.
+ */
+function addBlock(
+  out: Extracted,
+  seen: Set<Element>,
+  t: Element | null,
+  el: Element,
+  minText = minLength('text'),
+  map: TextMap = buildTextMap(t ?? el),
+  range?: [number, number]
+): void {
+  if (t && !range && seen.has(t)) return;
   const kind = kindOf(t ?? el);
+  const elLen = map.text.length;
   // A blank line (<br><br>) inside one block is a paragraph break, as Readability treats it in its own copy.
-  const cuts = [0, ...map.breaks, map.text.length];
+  const lo = range ? range[0] : 0;
+  const hi = range ? range[1] : elLen;
+  const cuts = [lo, ...map.breaks.filter((b) => b > lo && b < hi), hi];
   let added = false;
   for (let i = 0; i + 1 < cuts.length; i++) {
-    const text = map.text.slice(cuts[i], cuts[i + 1]).trim();
+    const raw = map.text.slice(cuts[i], cuts[i + 1]);
+    const text = raw.trim();
     if (text.length < (kind === 'text' ? minText : minLength(kind))) continue;
     added = true;
+    const base = cuts[i] + (raw.length - raw.trimStart().length);
     // "<b>1/ Stop waiting.</b><br>Body…" (X Articles, many blogs): the bold
     // lead line is a heading. Both parts keep the element; highlighting finds
-    // each one's text inside it.
+    // each one's text inside it, at `base`.
     const lead = kind === 'text' ? leadHeading(t ?? el, text) : null;
     if (lead) {
       out.paragraphs.push({ text: lead, kind: 'heading' });
-      out.blocks.push(makeSource(lead, t));
-      const rest = text.slice(lead.length).trim();
+      out.blocks.push(makeSource(lead, t, base, elLen));
+      const after = text.slice(lead.length);
+      const rest = after.trim();
       out.paragraphs.push({ text: rest, kind });
-      out.blocks.push(makeSource(rest, t));
+      out.blocks.push(makeSource(rest, t, base + lead.length + (after.length - after.trimStart().length), elLen));
     } else {
       out.paragraphs.push({ text, kind });
-      out.blocks.push(makeSource(text, t));
+      out.blocks.push(makeSource(text, t, base, elLen));
     }
   }
-  if (added && t) seen.add(t);
+  if (added && t && !range) seen.add(t);
 }
 
 function collect(elements: Iterable<Element>, liveFor: (el: Element) => Element | null): Extracted {
@@ -282,8 +318,46 @@ const debug = (...a: unknown[]): void => console.debug('[Lector page]', ...a);
 /** Tags that are page chrome or not prose, wherever they sit under the root. */
 const SKIP_ZONE = new Set(['NAV', 'ASIDE', 'FOOTER', 'FORM', 'DIALOG', 'MENU', 'NOSCRIPT', 'SVG', 'BUTTON', 'SELECT', 'TEXTAREA', 'TEMPLATE', 'SCRIPT', 'STYLE', 'IFRAME']);
 const SKIP_ROLE = /^(navigation|complementary|contentinfo|banner|search|dialog|alertdialog|menu|menubar|toolbar)$/;
+/**
+ * Class/id words that mark page furniture. Matched per class TOKEN, as whole words (split at - _ : . and camelCase),
+ * so "social-share" and "relatedPosts" match but "subscriber-content", "commentary" and "shared-content" do not.
+ * The long unambiguous names also match inside a word ("newsletterSignup").
+ */
+const JUNK_WORD =
+  /^(share|shares|sharing|social|subscribe|newsletter|related|recommend|recommended|recommendations?|promo|promoted|promotion|ad|ads|advert|advertisement|advertising|sponsor|sponsors|sponsored|cookie|cookies|comments?|breadcrumbs?|toolbar|reflist|references|navbox|catlinks|editsection|printfooter|sidebar|hatnote|byline)$/;
+const JUNK_INSIDE_WORD = /newsletter|breadcrumb|navbox|catlinks|editsection|printfooter|reflist|hatnote/;
+/** A token that names content is never furniture, whatever else it says ("content-with-sidebar", "post-share"). Comments always are. */
+const CONTENT_NAME = /content|article|body|main|post|entry|story/;
+
 /** Applied to DESCENDANTS of the root only (never the root or its ancestors). */
-const JUNK_NAME = /share|social|subscribe|newsletter|related|recommend|promo|advert|sponsor|cookie|comment|breadcrumb|toolbar|byline-actions|reflist|references|navbox|catlinks|editsection|printfooter|sidebar|hatnote|byline/i;
+function junkName(names: string): boolean {
+  for (const token of names.split(/\s+/)) {
+    if (!token) continue;
+    const t = token.replace(/([a-z])([A-Z])/g, '$1-$2').toLowerCase();
+    const words = t.split(/[-_:.]+/);
+    if (JUNK_INSIDE_WORD.test(t)) return true;
+    if (CONTENT_NAME.test(t) && !words.some((w) => /^comments?$/.test(w))) continue;
+    if (words.some((w) => JUNK_WORD.test(w))) return true;
+  }
+  return false;
+}
+
+/** A site banner: its own class names say so, or it holds the site's nav or logo. */
+const SITE_HEADER_NAME = /(^|[-_\s])(site[-_]?(header|title|name|logo|branding)|masthead|logo|brand(ing)?|navbar|topbar)([-_\s]|$)/i;
+const HEADER_FURNITURE_SEL = 'nav,[role="navigation"],[class*="logo" i],[class*="site-title" i],[class*="site-name" i],[class*="masthead" i]';
+const CONTENT_ANCESTOR_SEL = 'article,main,[role="main"],section';
+
+/**
+ * <header> is content when it sits in the article and holds a heading (HTML5 section headers); it is a banner
+ * when it holds the site's nav/logo or sits outside any content landmark without the article's h1.
+ */
+function headerBlocked(n: Element, h1: Element | null, insideRoot: boolean): boolean {
+  const siteLike = !!n.querySelector(HEADER_FURNITURE_SEL) || SITE_HEADER_NAME.test(`${n.getAttribute('class') ?? ''} ${n.id}`);
+  const inContent = insideRoot || !!n.parentElement?.closest(CONTENT_ANCESTOR_SEL);
+  if (siteLike) return !(inContent && h1 && n.contains(h1));
+  if (inContent && n.querySelector(HEADING_SEL)) return false;
+  return !!h1 && !n.contains(h1);
+}
 const HEADING_SEL = 'h1,h2,h3,h4,h5,h6,[role="heading"]';
 /** Elements whose presence means a div is a wrapper, not a text block. */
 const WRAPPER_SEL = `${BLOCK_SEL},div,section,article,ul,ol,table,aside,nav,header,footer,figure,form,main,details`;
@@ -293,25 +367,25 @@ const isTextDiv = (el: Element): boolean => /^(DIV|SECTION)$/i.test(el.tagName) 
 const isReadable = (el: Element): boolean =>
   el.matches(BLOCK_SEL) ? isLeafBlock(el) : isTextDiv(el) && !el.parentElement?.closest(BLOCK_SEL);
 
-function zoneBlocked(n: Element, h1: Element | null): boolean {
+function zoneBlocked(n: Element, h1: Element | null, insideRoot: boolean): boolean {
   if (SKIP_ZONE.has(n.tagName.toUpperCase())) return true;
   if (n.hasAttribute('hidden') || n.hasAttribute('inert') || n.getAttribute('aria-hidden') === 'true') return true;
   const role = n.getAttribute('role');
   if (role && SKIP_ROLE.test(role)) return true;
-  if (n.tagName === 'HEADER' && h1 && !n.contains(h1)) return true;
-  if (JUNK_NAME.test(n.getAttribute('class') ?? '') || JUNK_NAME.test(n.id)) return true;
+  if (n.tagName === 'HEADER' && headerBlocked(n, h1, insideRoot)) return true;
+  if (junkName(n.getAttribute('class') ?? '') || junkName(n.id)) return true;
   const cs = getComputedStyle(n);
   return cs.display === 'none' || cs.visibility === 'hidden' || cs.visibility === 'collapse';
 }
 
 /** Is `el`, or any ancestor below `top`, something we should not read? Memoised per node. */
-function makeBlocked(top: Element | null, h1: Element | null): (el: Element) => boolean {
+function makeBlocked(top: Element | null, h1: Element | null, insideRoot = true): (el: Element) => boolean {
   const memo = new Map<Element, boolean>();
   const check = (n: Element): boolean => {
     const known = memo.get(n);
     if (known !== undefined) return known;
     const p = n.parentElement;
-    const r = zoneBlocked(n, h1) || (!!p && p !== top && p !== document.documentElement && check(p));
+    const r = zoneBlocked(n, h1, insideRoot) || (!!p && p !== top && p !== document.documentElement && check(p));
     memo.set(n, r);
     return r;
   };
@@ -412,6 +486,43 @@ function findRoot(classic: Extracted): Element | null {
   return most >= total * 0.5 && sane(landmark) ? landmark : null;
 }
 
+/** The page's own names for the article (og:title, Readability's guess, the tab title), set before the live walk. */
+let titleHints: string[] = [];
+
+const words = (s: string): string[] => s.toLowerCase().replace(/[^\p{L}\p{N}]+/gu, ' ').trim().split(' ').filter(Boolean);
+
+/** Fuzzy: does `text` say (about) the same as one of the page's names for the article? */
+function matchesTitle(text: string): boolean {
+  const a = words(text);
+  if (!a.length) return false;
+  return titleHints.some((hint) => {
+    const b = words(hint);
+    if (!b.length) return false;
+    const common = a.filter((w) => b.includes(w)).length;
+    return common >= Math.min(a.length, b.length) * 0.8 && (common >= 2 || a.length === b.length);
+  });
+}
+
+/** A heading that belongs to the site's banner (logo, masthead), not to the article. */
+function bannerish(h: Element): boolean {
+  if (h.closest('[role="banner"],nav,[role="navigation"]')) return true;
+  for (let n: Element | null = h; n && n !== document.body; n = n.parentElement) {
+    if (SITE_HEADER_NAME.test(`${n.getAttribute('class') ?? ''} ${n.id}`)) return true;
+    if (n.tagName === 'HEADER' && !n.parentElement?.closest(CONTENT_ANCESTOR_SEL) && n.querySelector(HEADER_FURNITURE_SEL)) return true;
+  }
+  // Link-only text pointing at the site's home: the site name, not a title.
+  const a = h.querySelector('a[href]');
+  if (a && (a.textContent ?? '').trim() === (h.textContent ?? '').trim()) {
+    try {
+      const u = new URL(a.getAttribute('href') ?? '', location.href);
+      if (u.origin === location.origin && u.pathname.replace(/\/+$/, '') === '' && !matchesTitle(h.textContent ?? '')) return true;
+    } catch {
+      /* not a URL */
+    }
+  }
+  return false;
+}
+
 /**
  * The article's own title heading and other headings that sit just before the
  * root (a title above the body in its own wrapper, Substack's subtitle...).
@@ -422,17 +533,21 @@ function headingsBefore(root: Element): { h1: Element | null; extras: Element[] 
   let path: Element = root;
   for (let level = 0; level < 4 && path.parentElement && path.parentElement !== document.body; level++) {
     const parent: Element = path.parentElement;
-    const blocked = makeBlocked(parent, null);
+    const blocked = makeBlocked(parent, null, false);
     const before: Element[] = [];
     for (let sib = path.previousElementSibling; sib; sib = sib.previousElementSibling) before.push(sib);
+    const candidates: Element[] = [];
     for (const sib of before) {
       if (blocked(sib)) continue;
       if (!h1) {
-        const found = sib.matches('h1') ? sib : sib.querySelector('h1');
-        if (found && !blocked(found)) h1 = found;
+        for (const found of sib.matches('h1') ? [sib] : Array.from(sib.querySelectorAll('h1'))) {
+          if (!blocked(found) && !bannerish(found)) candidates.push(found);
+        }
       }
-      if (level === 0 && sib.matches(HEADING_SEL)) extras.push(sib);
+      if (level === 0 && sib.matches(HEADING_SEL) && !(sib.matches('h1') && bannerish(sib))) extras.push(sib);
     }
+    // The page's own name for the article beats the nearest h1 (a masthead can sit nearer than the title).
+    h1 = candidates.find((c) => matchesTitle(c.textContent ?? '')) ?? candidates[0] ?? null;
     if (h1) {
       if (!extras.includes(h1)) extras.push(h1);
       break;
@@ -453,34 +568,133 @@ const headingLevel = (el: Element): number => {
   return m ? Number(m[1]) : Number(el.getAttribute('aria-level')) || 2;
 };
 
+/** A unit of live-walk work, placed in document order by `pos`. */
+interface Entry {
+  pos: Node;
+  go: () => void;
+}
+
+/** Containers whose own text (between block children) we read. */
+const CONTAINER_SEL = 'div,section,blockquote,li,dd,td,article,main';
+
+/**
+ * Runs of the container's own text: text nodes and inline elements between its block children.
+ * Hidden, skipped and furniture inline elements are left out.
+ */
+function ownTextRuns(c: Element, blocked: (e: Element) => boolean): Text[][] {
+  const runs: Text[][] = [];
+  let cur: Text[] = [];
+  const flush = () => {
+    if (cur.length) runs.push(cur);
+    cur = [];
+  };
+  const textOf = (n: Node) => {
+    if (n.nodeType === Node.TEXT_NODE) cur.push(n as Text);
+    else if (n.nodeType === Node.ELEMENT_NODE && !isSkipped(n as Element)) n.childNodes.forEach(textOf);
+  };
+  for (const child of c.childNodes) {
+    if (child.nodeType === Node.TEXT_NODE) cur.push(child as Text);
+    else if (child.nodeType === Node.ELEMENT_NODE) {
+      const e = child as Element;
+      if (isSkipped(e)) continue;
+      if (e.matches(WRAPPER_SEL) || e.querySelector(WRAPPER_SEL)) flush();
+      else if (!blocked(e)) textOf(e);
+    }
+  }
+  flush();
+  return runs;
+}
+
+const MONTH = '(?:jan|feb|mar|apr|may|jun|jul|aug|sep|sept|oct|nov|dec)[a-z]*\\.?';
+const DATE_RE = new RegExp(
+  `\\b${MONTH}\\s+\\d{1,2}(?:st|nd|rd|th)?(?:,?\\s+\\d{4})?\\b|\\b\\d{1,2}\\s+${MONTH}(?:,?\\s+\\d{4})?\\b|\\b\\d{4}-\\d{2}-\\d{2}\\b|\\b\\d{1,2}[/.]\\d{1,2}[/.]\\d{2,4}\\b`,
+  'i'
+);
+const META_RE =
+  /\bmin(?:ute)?s?\.? read\b|scroll to continue|^(?:advertisement|advert|ad\b|sponsored|promoted|sign up|subscribe|follow\b|share\b|©|\(c\)|copyright|published|updated|last updated|posted|continue reading|read more|related)/i;
+
+const sentenceLike = (text: string): boolean => /[.!?…]["”')\]]*$/.test(text) && text.split(/\s+/).length >= 6;
+
+/** Short text that is page metadata, not prose: dates, "6 min read", "Advertisement", "Sign up". Never applied to p/li/headings. */
+function looksLikeMeta(text: string): boolean {
+  if (text.length >= 60 || sentenceLike(text)) return false;
+  return META_RE.test(text) || DATE_RE.test(text);
+}
+
 function liveWalk(root: Element, core: Element = root): Extracted | null {
   const before = headingsBefore(root);
   const rawBlocked = makeBlocked(root, null);
-  const h1 = Array.from(root.querySelectorAll('h1')).find((h) => !rawBlocked(h)) ?? before.h1;
+  const h1s = Array.from(root.querySelectorAll('h1')).filter((h) => !rawBlocked(h) && !bannerish(h));
+  const h1 = h1s.find((h) => matchesTitle(h.textContent ?? '')) ?? h1s[0] ?? before.h1;
   const inRoot = makeBlocked(root, h1);
   const out: Extracted = { paragraphs: [], blocks: [] };
   const seen = new Set<Element>();
   const levels: number[] = []; // per paragraph: heading level, 0 for body text
   const skipsAt: number[] = []; // paragraphs.length at the moment each link-dense block was skipped
   const run = (el: Element, blocked: ((e: Element) => boolean) | null) => {
-    const cell = el.tagName === 'TD' && !!el.closest('table')?.tHead; // cells of tables with a header row (spec/compat tables), not infobox layouts
+    const table = el.tagName === 'TD' ? el.closest('table') : null;
+    // Cells of data tables: with a header row (spec/compat tables), or sentence-like cells of other tables, but not infobox layouts.
+    const cell = !!table && (!!table.tHead || (!/infobox|vcard|navbox|sidebar/i.test(table.className) && sentenceLike(buildTextMap(el).text)));
     if (!(cell ? !el.querySelector(WRAPPER_SEL) && !el.parentElement?.closest(BLOCK_SEL) : isReadable(el)) || blocked?.(el)) return;
-    // A root widened to reach the intro: read what comes before the original root, never what trails it (CTAs, footers).
-    if (core !== root && !core.contains(el) && core.compareDocumentPosition(el) & Node.DOCUMENT_POSITION_FOLLOWING) return;
+    if (beyondCore(el)) return;
     const tag = el.tagName.toUpperCase();
     const isHeading = /^H[1-6]$/.test(tag) || el.getAttribute('role') === 'heading';
-    const text = buildTextMap(el).text;
+    const map = buildTextMap(el);
+    const text = map.text;
     if (tag === 'PRE' && text.length > 200) return; // code, not prose
+    if (/^(DIV|SECTION)$/.test(tag) && looksLikeMeta(text)) return; // "Published March 12 · 6 min read", "Advertisement"
     if (!exemptFromLinkSkip(el, isHeading) && linkDense(el, text.length)) {
       skipsAt.push(out.paragraphs.length);
       return;
     }
     const n = out.paragraphs.length;
-    addBlock(out, seen, el, el, /^(DIV|SECTION|TD)$/.test(tag) ? 20 : minLength('text'));
+    addBlock(out, seen, el, el, /^(DIV|SECTION|TD)$/.test(tag) ? 20 : minLength('text'), map);
     for (let i = n; i < out.paragraphs.length; i++) levels.push(out.paragraphs[i].kind === 'heading' && (i > n || isHeading) ? headingLevel(el) : 0);
   };
+  // A root widened to reach the intro: read what comes before the original root, never what trails it (CTAs, footers).
+  const beyondCore = (n: Node): boolean => core !== root && !core.contains(n) && !!(core.compareDocumentPosition(n) & Node.DOCUMENT_POSITION_FOLLOWING);
+  // Text that sits directly in a container next to block children (<div>Lead<p>…</p></div>, <blockquote>Intro<p>…).
+  const runEntries = (c: Element): Entry[] => {
+    if (isReadable(c) || !c.querySelector(WRAPPER_SEL) || (c !== root && inRoot(c))) return [];
+    const runs = ownTextRuns(c, inRoot).filter((r) => r.reduce((n, t) => n + t.data.trim().length, 0) >= 20);
+    if (!runs.length) return [];
+    const map = buildTextMap(c);
+    const first = new Map<Text, number>();
+    const last = new Map<Text, number>();
+    const where = new Map(map.nodes.map((t, i) => [t, i] as const));
+    for (let i = 0; i < map.nodeOf.length; i++) {
+      const t = map.nodes[map.nodeOf[i]];
+      if (!first.has(t)) first.set(t, i);
+      last.set(t, i);
+    }
+    const entries: Entry[] = [];
+    for (const r of runs) {
+      const have = r.filter((t) => where.has(t) && first.has(t));
+      if (!have.length || beyondCore(have[0])) continue;
+      const lo = Math.min(...have.map((t) => first.get(t)!));
+      const hi = Math.max(...have.map((t) => last.get(t)!)) + 1;
+      entries.push({
+        pos: have[0],
+        go: () => {
+          const text = map.text.slice(lo, hi).trim();
+          if (text.length < 20 || looksLikeMeta(text)) return;
+          const linked = have.reduce((n, t) => n + (t.parentElement?.closest('a') ? t.data.trim().length : 0), 0);
+          if (text.length < 80 && linked >= 0.7 * text.length) return;
+          if (!/[\p{L}\p{N}]/u.test(text)) return;
+          const n = out.paragraphs.length;
+          addBlock(out, seen, c, c, 20, map, [lo, hi]);
+          for (let i = n; i < out.paragraphs.length; i++) levels.push(0);
+        },
+      });
+    }
+    return entries;
+  };
   for (const el of before.extras) run(el, null); // already vetted by headingsBefore
-  for (const el of root.querySelectorAll(`${BLOCK_SEL},div,section,td`)) run(el, inRoot);
+  const entries: Entry[] = [];
+  for (const el of root.querySelectorAll(`${BLOCK_SEL},div,section,td`)) entries.push({ pos: el, go: () => run(el, inRoot) });
+  for (const c of [root, ...root.querySelectorAll(CONTAINER_SEL)]) entries.push(...runEntries(c));
+  entries.sort((a, b) => (a.pos === b.pos ? 0 : a.pos.compareDocumentPosition(b.pos) & Node.DOCUMENT_POSITION_FOLLOWING ? -1 : 1));
+  for (const e of entries) e.go();
   // "Keep reading" above a list of links we skipped: a heading whose whole section (up to the next heading of the
   // same or higher level) kept no body text, but had link-only blocks skipped, is an orphan.
   const drop = new Set<number>();
@@ -524,6 +738,30 @@ function widenToTitle(root: Element): Element {
   return root;
 }
 
+/**
+ * Total chars of Readability blocks (>= 80 chars) that `live` does not cover: a block is covered when at least 90%
+ * of its 4-word shingles occur in the live text. Logs each uncovered block.
+ */
+function missingFrom(live: Extracted, classic: Extracted, skippedOnPurpose: (el: Element) => boolean): number {
+  const shingles = (text: string): string[] => {
+    const w = words(text);
+    return w.length < 4 ? [w.join(' ')] : w.slice(0, w.length - 3).map((_, i) => w.slice(i, i + 4).join(' '));
+  };
+  const have = new Set<string>();
+  for (const p of live.paragraphs) for (const s of shingles(p.text)) have.add(s);
+  let missing = 0;
+  for (const [i, p] of classic.paragraphs.entries()) {
+    const src = classic.blocks[i];
+    // Code, and anything the walk's own rules (furniture, hidden, outside the root) keep out, is not a loss.
+    if (p.text.length < 80 || src?.tag === 'PRE' || (src?.el && skippedOnPurpose(src.el))) continue;
+    const s = shingles(p.text);
+    if (s.filter((x) => have.has(x)).length >= s.length * 0.9) continue;
+    missing += p.text.length;
+    debug(`extract: live walk does not cover "${p.text.slice(0, 60)}"`);
+  }
+  return missing;
+}
+
 /** Readability finds the article; the live DOM under its root is what we read. Null = use Readability's output. */
 function readLive(classic: Extracted): Extracted | null {
   try {
@@ -535,6 +773,10 @@ function readLive(classic: Extracted): Extracted | null {
     const mine = charsOf(live);
     const theirs = charsOf(classic);
     if (mine < theirs * 0.7) return debug(`extract: live walk too thin (${mine} vs ${theirs} chars)`), null;
+    // Readability's own blocks are the other opinion: a long one our walk did not read (>= 90% of it) is text we lost.
+    const blocked = makeBlocked(wide, null);
+    const missing = missingFrom(live, classic, (el) => !wide.contains(el) || blocked(el));
+    if (missing > theirs * 0.1) return debug(`extract: live walk misses ${missing} of ${theirs} chars Readability kept`), null;
     return live;
   } catch (e) {
     warnOnce('live walk failed', e);
@@ -563,6 +805,7 @@ function extractWithReadability(): Extracted | null {
     return i !== null ? liveBlocks[Number(i)] ?? null : null;
   });
   classic.parsedTitle = parsed.title ?? undefined;
+  titleHints = [meta('meta[property="og:title"]'), parsed.title ?? '', document.title].filter(Boolean).flatMap((t) => [t, cleanTitle(t)]);
   if (!classic.paragraphs.length) return parsed.textContent ? fromPlainText(parsed.textContent) : null;
   const live = readLive(classic);
   if (live) {
@@ -606,14 +849,68 @@ function extractFallback(): Extracted | null {
   return long.length >= 2 ? result : null;
 }
 
-function findParagraphIndexFor(node: Node | null, list: Source[]): number {
+/** Char index in `map.text` of the DOM position (node, offset), or -1 when it is not inside the map. */
+function charIndexAt(map: TextMap, node: Node, offset: number): number {
+  if (node.nodeType === Node.TEXT_NODE) {
+    const k = map.nodes.indexOf(node as Text);
+    if (k === -1) return -1;
+    let last = -1;
+    for (let i = 0; i < map.nodeOf.length; i++) {
+      if (map.nodeOf[i] !== k) {
+        if (last !== -1) break;
+        continue;
+      }
+      last = i;
+      if (map.offsetOf[i] >= offset) return i;
+    }
+    return last === -1 ? -1 : last + 1; // past the node's last char
+  }
+  // An element boundary: the first mapped text node at or after it.
+  const r = document.createRange();
+  try {
+    r.setStart(node, Math.min(offset, node.childNodes.length));
+  } catch {
+    return -1;
+  }
+  for (let k = 0; k < map.nodes.length; k++) {
+    if (r.comparePoint(map.nodes[k], 0) >= 0) {
+      const at = map.nodeOf.indexOf(k);
+      return at === -1 ? map.text.length : at;
+    }
+  }
+  return map.text.length;
+}
+
+/**
+ * The paragraph a DOM position belongs to. The innermost source element wins (a container's own text runs
+ * share its element with its child blocks). Sources sharing one element (split pieces) are told apart by the
+ * position's char offset inside that element's text.
+ */
+function sourceAt(list: Source[], node: Node, offset = 0): number {
+  const el = node.nodeType === Node.ELEMENT_NODE ? (node as Element) : node.parentElement;
+  if (!el) return -1;
+  const hits: number[] = [];
+  for (let i = 0; i < list.length; i++) if (list[i].el?.contains(el)) hits.push(i);
+  if (hits.length < 2) return hits.length ? hits[0] : -1;
+  const inner = hits.filter((i) => !hits.some((j) => list[j].el !== list[i].el && list[i].el!.contains(list[j].el!)));
+  if (inner.length === 1) return inner[0];
+  const c = charIndexAt(buildTextMap(list[inner[0]].el!), node, offset);
+  if (c === -1) return inner[0];
+  let pick = inner[0];
+  for (const i of inner) {
+    const b = list[i];
+    if (c >= b.base && c < b.base + b.len) return i;
+    if (b.base <= c) pick = i; // in a gap between pieces: the one before it
+  }
+  return pick;
+}
+
+function findParagraphIndexFor(node: Node | null, list: Source[], offset = 0): number {
   if (!node) return 0;
   const el = node.nodeType === Node.ELEMENT_NODE ? (node as Element) : node.parentElement;
   if (!el) return 0;
-  for (let i = 0; i < list.length; i++) {
-    const b = list[i];
-    if (b.el && b.el.contains(el)) return i;
-  }
+  const at = sourceAt(list, node, offset);
+  if (at !== -1) return at;
   // Selection may sit before/after the article; pick the first block after it.
   for (let i = 0; i < list.length; i++) {
     const b = list[i];
@@ -674,7 +971,7 @@ function hereIndex(list: Source[], selection: Selection | null): number | null {
   const anchor = selection?.rangeCount ? selection.anchorNode : null;
   const anchorEl = anchor && (anchor.nodeType === Node.ELEMENT_NODE ? (anchor as Element) : anchor.parentElement);
   if (anchor && anchorEl && document.body.contains(anchorEl) && !anchorEl.closest('input,textarea')) {
-    return findParagraphIndexFor(anchor, list);
+    return findParagraphIndexFor(anchor, list, selection!.anchorOffset);
   }
   const active = document.activeElement;
   if (active && active !== document.body && active !== document.documentElement) return findParagraphIndexFor(active, list);
@@ -683,7 +980,35 @@ function hereIndex(list: Source[], selection: Selection | null): number | null {
     const r = b.el.getBoundingClientRect();
     return r.height > 0 && r.bottom > 24;
   });
-  return top === -1 ? null : top;
+  if (top === -1) return null;
+  // Several pieces share this element (a <br><br> block): take the one at the top of the screen.
+  const el = list[top].el!;
+  if (list.some((b, i) => i !== top && b.el === el)) {
+    const r = el.getBoundingClientRect();
+    const caret = caretAt(Math.min(Math.max(r.left + 2, 0), window.innerWidth - 1), Math.min(Math.max(r.top, 24) + 2, window.innerHeight - 1));
+    if (caret && el.contains(caret.node)) {
+      const at = sourceAt(list, caret.node, caret.offset);
+      if (at !== -1 && list[at].el === el) return at;
+    }
+  }
+  return top;
+}
+
+/** The text position under a viewport point. */
+function caretAt(x: number, y: number): { node: Node; offset: number } | null {
+  const doc = document as Document & {
+    caretPositionFromPoint?: (x: number, y: number) => { offsetNode: Node; offset: number } | null;
+    caretRangeFromPoint?: (x: number, y: number) => Range | null;
+  };
+  try {
+    const p = doc.caretPositionFromPoint?.(x, y);
+    if (p) return { node: p.offsetNode, offset: p.offset };
+    const r = doc.caretRangeFromPoint?.(x, y);
+    if (r) return { node: r.startContainer, offset: r.startOffset };
+  } catch {
+    /* no caret API */
+  }
+  return null;
 }
 
 function extract(mode: 'article' | 'selection' | 'fromSelection'): Article | null {
@@ -712,19 +1037,24 @@ function extract(mode: 'article' | 'selection' | 'fromSelection'): Article | nul
   // it. Tab titles are often "Page | Site"; match and speak the best part.
   const paragraphs = extracted.paragraphs;
   const list = extracted.blocks;
-  const first = paragraphs[0]?.text.toLowerCase() ?? '';
   // The page's own name for the article: og:title, the article h1, Readability's guess, then the tab title
   // (X's tab title is `Name on X: "https://t.co/…" / X`; its og:title and h1 are usable).
   const title =
     chooseTitle({ og: meta('meta[property="og:title"]'), heading: extracted.h1, readability: extracted.parsedTitle, doc: docTitle }) || docTitle;
-  const split = (t: string) => t.split(/\s+[|–—·•]\s+|\s+-\s+/).map((p) => p.trim()).filter(Boolean);
-  const parts = [...split(title), ...split(docTitle)];
+  const split = (t: string) => t.split(SEPARATOR).map((p) => p.trim()).filter(Boolean);
+  const parts = [...split(title), ...split(docTitle)].map((p) => p.toLowerCase());
+  // The article may open with a kicker or deck before its title: look at the first few paragraphs.
+  const opening = paragraphs.slice(0, 3).map((p) => p.text.toLowerCase());
+  const h1 = extracted.h1?.toLowerCase();
   const hasTitleFirst =
     !title ||
-    (!!extracted.h1 && first === extracted.h1.toLowerCase()) ||
-    parts.some((p) => first === p.toLowerCase() || p.toLowerCase().startsWith(first) || first.startsWith(p.toLowerCase()));
+    opening.some(
+      (t, i) =>
+        (!!h1 && t === h1) ||
+        (i === 0 ? parts.some((p) => t === p || p.startsWith(t) || t.startsWith(p)) : parts.some((p) => t === p))
+    );
   let offset = 0;
-  const spoken = split(title).reduce((a, b) => (b.length > a.length ? b : a), title);
+  const spoken = cleanTitle(title);
   if (!hasTitleFirst && spoken.length > 2) {
     paragraphs.unshift({ text: spoken, kind: 'heading' });
     list.unshift(makeSource(spoken, null));
@@ -904,15 +1234,28 @@ function viaDoc(i: number, seg: string, start: number): Resolved | null {
 /** The block element was swapped out: find the element on the page with the same text. */
 function relocate(src: Source): void {
   if (Date.now() - src.relocatedAt < 3000) return;
-  const hit = Array.from(document.body.querySelectorAll(`${BLOCK_SEL},div,section`)).find(
-    (el) => isReadable(el) && (el.textContent ?? '').replace(/\s+/g, ' ').trim() === src.text && buildTextMap(el).text === src.text
-  );
+  // A split piece (or a container's own text run) is a slice of its element: match the element's text at `base`.
+  const whole = src.base === 0 && src.elLen === src.len;
+  const hit = Array.from(document.body.querySelectorAll(whole || !src.tag ? `${BLOCK_SEL},div,section` : src.tag.toLowerCase())).find((el) => {
+    if (whole ? !isReadable(el) : el.tagName !== src.tag) return false;
+    const text = buildTextMap(el).text;
+    return text.length === src.elLen && text.slice(src.base, src.base + src.len) === src.text;
+  });
   if (hit) {
     src.el = hit;
     src.map = null;
   } else {
     src.relocatedAt = Date.now();
   }
+}
+
+/** Index of the occurrence of `needle` in `hay` closest to `around`, or -1. */
+function nearestIndex(hay: string, needle: string, around: number): number {
+  const after = hay.indexOf(needle, Math.max(0, around));
+  const before = around > 0 ? hay.lastIndexOf(needle, around) : -1;
+  if (after === -1) return before;
+  if (before === -1) return after;
+  return around - before <= after - around ? before : after;
 }
 
 function viaBlock(src: Source, start: number, end: number): Resolved | null {
@@ -922,11 +1265,12 @@ function viaBlock(src: Source, start: number, end: number): Resolved | null {
   for (let pass = 0; pass < 2; pass++) {
     if (!src.map || (pass === 1)) src.map = buildTextMap(src.el);
     const map = src.map;
-    let s = start;
-    let e = end;
+    // `start`/`end` are relative to the paragraph; the paragraph may be one piece of a shared element.
+    let s = src.base + start;
+    let e = src.base + end;
     if (map.text.slice(s, e) !== seg) {
-      // Page text drifted from the extraction: look the segment up in the block's current text.
-      s = mapCanon(map).indexOf(canonOf(seg));
+      // Page text drifted from the extraction: look the segment up in the block's current text, nearest to where it was.
+      s = nearestIndex(mapCanon(map), canonOf(seg), src.base + start);
       e = s + seg.length;
       if (s === -1) continue;
     }
@@ -1179,7 +1523,8 @@ function register(): void {
       const target = e.target instanceof Element ? e.target : null;
       // Links, buttons and fields keep their own Alt+click (e.g. "download link").
       if (!target || target.closest('a[href],button,input,select,textarea,summary,label,[contenteditable],[role="button"],[role="link"]')) return;
-      const idx = sources.findIndex((b) => b.el && b.el.contains(target));
+      const caret = caretAt(e.clientX, e.clientY);
+      const idx = caret && target.contains(caret.node) ? sourceAt(sources, caret.node, caret.offset) : sourceAt(sources, target);
       if (idx === -1) return;
       e.preventDefault();
       e.stopPropagation();
