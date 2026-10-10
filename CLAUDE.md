@@ -87,7 +87,7 @@ the likely cause of old bug "offscreen sometimes doesn't load". Mitigated by ses
 
 Voice previews: 28 pre-generated MP3 files (~25KB each) in `static/previews/`. Generated via the Voicebox Python backend. Each says "Hi, I'm [name], and I'll be reading to you."
 
-## Status (v0.3)
+## Status (v0.5)
 
 Shipped in v0.3 (all committed): Lector rebrand + A×F popup (light/dark), word-by-word ink-in (popup) and growing page
 underline synced to speech, robust page highlighting across sites (fallback text search, stale-DOM recovery), Show on page /
