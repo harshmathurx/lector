@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "Lector",
-  "version": "0.5.0",
+  "version": "0.5.1",
   "description": "Listen to any English web page with natural voices that run on your own computer. No account, nothing leaves your browser.",
   "permissions": [
     "activeTab",
