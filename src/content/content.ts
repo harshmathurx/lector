@@ -191,8 +191,21 @@ const makeSource = (text: string, el: Element | null, base = 0, elLen = text.len
   tag: el?.tagName ?? '',
 });
 
+/**
+ * Substack (and some other editors) mark an image caption up as <h6> right after the image block. A minor heading
+ * (h5/h6) whose previous sibling is an image/figure with no prose of its own is a caption, read as text.
+ */
+function isCaptionHeading(el: Element): boolean {
+  if (!/^H[56]$/i.test(el.tagName)) return false;
+  const prev = el.previousElementSibling;
+  if (!prev) return false;
+  const media = prev.matches('figure,picture,img,video') || !!prev.querySelector('figure,picture,img,video');
+  return media && (prev.textContent ?? '').trim().length < 40;
+}
+
 function kindOf(el: Element): ParagraphKind {
   const tag = el.tagName.toUpperCase();
+  if (isCaptionHeading(el)) return 'text';
   if (/^H[1-6]$/.test(tag) || el.getAttribute('role') === 'heading') return 'heading';
   if (tag === 'BLOCKQUOTE') return 'quote';
   if (tag === 'LI' || tag === 'DD' || tag === 'DT') return 'list';
@@ -519,6 +532,58 @@ function findRoot(classic: Extracted): Element | null {
   return most >= total * 0.5 && sane(landmark) ? landmark : null;
 }
 
+/**
+ * Finds the live root by TEXT, for pages where little of Readability's output has a live twin (it rewrites loose text
+ * and <br><br> runs into new <p>s, e.g. old table layouts). Takes a distinctive snippet from several of Readability's
+ * longest paragraphs, locates each in the live DOM's text nodes (comments are not text nodes) and returns the
+ * deepest common container of the hits, under the same bloat guard as findRoot.
+ */
+function findRootByText(classic: Extracted): Element | null {
+  const want = charsOf(classic);
+  const norm = (t: string): string => t.replace(/\s+/g, ' ').trim();
+  const longest = classic.paragraphs
+    .map((p) => norm(p.text))
+    .filter((t) => t.length >= 80)
+    .sort((a, b) => b.length - a.length)
+    .slice(0, 6);
+  if (!longest.length) return null;
+  const snippets = longest.map((t) => {
+    const at = (frac: number): string => {
+      const i = t.indexOf(' ', Math.floor((t.length - 50) * frac)) + 1;
+      return t.slice(i, i + 50);
+    };
+    return [at(0.5), at(0.2), at(0.8)].filter((x) => x.length >= 40);
+  });
+  const nodes: { text: string; node: Text }[] = [];
+  const w = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT, {
+    acceptNode: (n) => (/^(SCRIPT|STYLE|NOSCRIPT|TEMPLATE|SVG)$/i.test(n.parentElement?.tagName ?? '') ? NodeFilter.FILTER_REJECT : NodeFilter.FILTER_ACCEPT),
+  });
+  for (let n = w.nextNode(); n; n = w.nextNode()) {
+    const text = norm((n as Text).data);
+    if (text.length >= 20) nodes.push({ text, node: n as Text });
+  }
+  const hits: Element[] = [];
+  for (const list of snippets) {
+    for (const snip of list) {
+      const hit = nodes.find((x) => x.text.includes(snip));
+      if (hit?.node.parentElement) {
+        hits.push(hit.node.parentElement);
+        break;
+      }
+    }
+  }
+  if (hits.length < Math.min(2, longest.length)) return null;
+  let common: Element | null = hits[0];
+  while (common && !hits.every((h) => common!.contains(h))) common = common.parentElement;
+  // Inline wrappers (<font>, <span>) are not roots: go up to the container holding them.
+  while (common && common !== document.body && !common.matches(CONTAINER_SEL)) common = common.parentElement;
+  // A container with no block children is read by the walk as a block of its own, which needs a root above it.
+  if (common && common !== document.body && !common.querySelector(WRAPPER_SEL)) common = common.parentElement;
+  const sane = (el: Element | null): el is Element =>
+    !!el && el !== document.body && el !== document.documentElement && textSize(el) <= want * 3;
+  return sane(common) ? common : null;
+}
+
 /** The page's own names for the article (og:title, Readability's guess, the tab title), set before the live walk. */
 let titleHints: string[] = [];
 
@@ -807,25 +872,81 @@ function missingFrom(live: Extracted, classic: Extracted, skippedOnPurpose: (el:
   return missing;
 }
 
+/** Reads the live DOM under `root`; null (with the reason logged) when the result does not hold up against Readability's own output. */
+function tryRoot(root: Element, classic: Extracted): Extracted | null {
+  const wide = widenToTitle(root);
+  const live = liveWalk(wide, root);
+  if (!live) return debug('extract: live walk found nothing'), null;
+  const mine = charsOf(live);
+  const theirs = charsOf(classic);
+  if (mine < theirs * 0.7) return debug(`extract: live walk too thin (${mine} vs ${theirs} chars)`), null;
+  // Readability's own blocks are the other opinion: a long one our walk did not read (>= 90% of it) is text we lost.
+  const blocked = makeBlocked(wide, null);
+  const missing = missingFrom(live, classic, (el) => !wide.contains(el) || blocked(el));
+  if (missing > theirs * 0.1) return debug(`extract: live walk misses ${missing} of ${theirs} chars Readability kept`), null;
+  return live;
+}
+
 /** Readability finds the article; the live DOM under its root is what we read. Null = use Readability's output. */
 function readLive(classic: Extracted): Extracted | null {
   try {
     const root = findRoot(classic);
-    if (!root) return debug('extract: no usable live root'), null;
-    const wide = widenToTitle(root);
-    const live = liveWalk(wide, root);
-    if (!live) return debug('extract: live walk found nothing'), null;
-    const mine = charsOf(live);
-    const theirs = charsOf(classic);
-    if (mine < theirs * 0.7) return debug(`extract: live walk too thin (${mine} vs ${theirs} chars)`), null;
-    // Readability's own blocks are the other opinion: a long one our walk did not read (>= 90% of it) is text we lost.
-    const blocked = makeBlocked(wide, null);
-    const missing = missingFrom(live, classic, (el) => !wide.contains(el) || blocked(el));
-    if (missing > theirs * 0.1) return debug(`extract: live walk misses ${missing} of ${theirs} chars Readability kept`), null;
-    return live;
+    if (root) {
+      const live = tryRoot(root, classic);
+      if (live) return live;
+    } else debug('extract: no usable live root');
+    // Little of Readability's text has a live twin, or the mapped root did not hold up: locate the root by text.
+    const byText = findRootByText(classic);
+    if (!byText || byText === root) return null;
+    debug('extract: root by text');
+    return tryRoot(byText, classic);
   } catch (e) {
     warnOnce('live walk failed', e);
     return null;
+  }
+}
+
+/** A date that opens a text run ("May 2008", "March 3, 2021") and is followed by a capitalised sentence: page metadata, not prose. */
+const LEAD_DATE = new RegExp(`^(?:${DATE_RE.source}|${MONTH}\\s+\\d{4})[\\s\u00b7\u2014\u2013|-]*`, 'i');
+
+function stripLeadingDate(text: string): string {
+  const m = LEAD_DATE.exec(text);
+  if (!m || m[0].length > 30) return text;
+  const rest = text.slice(m[0].length);
+  return /^[A-Z\u201c"]/.test(rest) ? rest : text;
+}
+
+/**
+ * Readability keeps loose text next to block children as-is (`<div><span>Intro text…</span><p>…</p></div>`, or
+ * `<li>Lead<ul>…</ul></li>`), and our leaf-block collect would drop it. Wrap each such run (>= 20 chars) in a <p>.
+ */
+function wrapLooseText(doc: Document): void {
+  const walker = doc.createTreeWalker(doc.body, NodeFilter.SHOW_COMMENT);
+  const comments: Node[] = [];
+  for (let n = walker.nextNode(); n; n = walker.nextNode()) comments.push(n);
+  comments.forEach((c) => c.parentNode?.removeChild(c));
+  doc.body.normalize();
+  const isInline = (n: Node): boolean =>
+    n.nodeType === Node.TEXT_NODE ||
+    (n.nodeType === Node.ELEMENT_NODE && !SKIP.has((n as Element).tagName.toUpperCase()) && !(n as Element).matches(WRAPPER_SEL) && !(n as Element).querySelector(WRAPPER_SEL));
+  for (const c of [doc.body, ...doc.body.querySelectorAll(CONTAINER_SEL)]) {
+    if (!c.querySelector(BLOCK_SEL) || c.matches('pre')) continue;
+    let run: Node[] = [];
+    const flush = (): void => {
+      const text = stripLeadingDate(run.map((n) => n.textContent ?? '').join('').replace(/\s+/g, ' ').trim());
+      if (text.length >= 20 && /[\p{L}\p{N}]/u.test(text)) {
+        const p = doc.createElement('p');
+        p.textContent = text;
+        c.insertBefore(p, run[0]);
+        run.forEach((n) => c.removeChild(n));
+      }
+      run = [];
+    };
+    for (const child of Array.from(c.childNodes)) {
+      if (isInline(child)) run.push(child);
+      else if (run.length) flush();
+    }
+    if (run.length) flush();
   }
 }
 
@@ -845,6 +966,7 @@ function extractWithReadability(): Extracted | null {
   if (!parsed?.content) return null;
 
   const doc = new DOMParser().parseFromString(parsed.content, 'text/html');
+  wrapLooseText(doc);
   const classic = collect(doc.body.querySelectorAll(BLOCK_SEL), (el) => {
     const i = el.getAttribute('data-vb-i');
     return i !== null ? liveBlocks[Number(i)] ?? null : null;
